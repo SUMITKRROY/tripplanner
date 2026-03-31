@@ -8,6 +8,9 @@
         android:label="tripplanner"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyCtqMDga-shR3WE-7oS_y9wuis_gGnCqN8" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -46,5 +49,14 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
+        <package android:name="com.google.android.apps.maps"/>
     </queries>
 </manifest>

@@ -1,52 +1,351 @@
-import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../../../core/constants/app_constants.dart';
+import '../../../core/routes/app_routes.dart';
 import '../../../core/utils/navigation_utils.dart';
+import '../bloc/trip_planner_bloc.dart';
+import '../bloc/trip_planner_state.dart';
+import '../models/generate_trip_response_model.dart';
+
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
+
+String _inr(num? v) {
+  if (v == null) return '—';
+  final rounded = v.round();
+  if (rounded >= 10000000) {
+    return '₹${(rounded / 10000000).toStringAsFixed(1)}Cr';
+  } else if (rounded >= 100000) {
+    return '₹${(rounded / 100000).toStringAsFixed(1)}L';
+  } else if (rounded >= 1000) {
+    final formatted = rounded.toString().replaceAllMapped(
+      RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+      (m) => '${m[1]},',
+    );
+    return '₹$formatted';
+  }
+  return '₹$rounded';
+}
+
+// ─────────────────────────────────────────────
+//  ROOT SCREEN
+// ─────────────────────────────────────────────
 
 class ExpenseDetailScreen extends StatelessWidget {
   const ExpenseDetailScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => NavigationUtils.pop(context),
+    return BlocBuilder<TripPlannerBloc, TripPlannerState>(
+      builder: (context, state) {
+        if (state is! TripPlannerSuccess) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: () => NavigationUtils.pop(context),
+              ),
+              title: const Text('Expense Breakdown'),
+            ),
+            body: const Center(
+              child: Text('Open a trip plan first to see expenses.'),
+            ),
+          );
+        }
+        return _ExpenseBody(data: state.data);
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  BODY
+// ─────────────────────────────────────────────
+
+class _ExpenseBody extends StatefulWidget {
+  const _ExpenseBody({required this.data});
+  final GenerateTripResponseModel data;
+
+  @override
+  State<_ExpenseBody> createState() => _ExpenseBodyState();
+}
+
+class _ExpenseBodyState extends State<_ExpenseBody> {
+  int _selectedNav = 2;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final data = widget.data;
+    final e = data.expenses;
+    final persons = data.persons ?? 1;
+    final days = data.days ?? data.tripPlan.length;
+    final city = data.city ?? 'Your Trip';
+    final total = e?.total;
+    final perPerson = e?.perPerson ?? (total != null ? total ~/ persons : null);
+
+    // Build category rows
+    final rows = <_CategoryRow>[];
+    if (e?.hotel != null) {
+      rows.add(
+        _CategoryRow(
+          icon: Icons.hotel_rounded,
+          label: 'Hotel',
+          perPerson: (e!.hotel! / persons).round(),
+          total: e.hotel!,
         ),
-        title: const Text('Expense breakdown'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+      );
+    }
+    if (e?.food != null) {
+      rows.add(
+        _CategoryRow(
+          icon: Icons.restaurant_rounded,
+          label: 'Food',
+          perPerson: (e!.food! / persons).round(),
+          total: e.food!,
+        ),
+      );
+    }
+    if (e?.travel != null) {
+      rows.add(
+        _CategoryRow(
+          icon: Icons.directions_bus_rounded,
+          label: 'Travel',
+          perPerson: (e!.travel! / persons).round(),
+          total: e.travel!,
+        ),
+      );
+    }
+    if (e?.tickets != null) {
+      rows.add(
+        _CategoryRow(
+          icon: Icons.confirmation_number_rounded,
+          label: 'Entry\nFees',
+          perPerson: (e!.tickets! / persons).round(),
+          total: e.tickets!,
+        ),
+      );
+    }
+
+    // Budget health: percentage of total vs. expected (heuristic)
+    final budgetPct = total != null && days > 0
+        ? math.min(100, ((total / (days * persons * 3000)) * 100).round())
+        : 75;
+
+    // Potential savings (heuristic: 10% of food + travel)
+    final savings = ((e?.food ?? 0) + (e?.travel ?? 0)) * 0.1;
+
+    return Scaffold(
+      backgroundColor: scheme.surface,
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Per-person and total costs by category',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
-            const SizedBox(height: 20),
-            _ExpenseTable(
-              rows: const [
-                _ExpenseRow(category: 'Hotel', perPerson: 320, total: 640),
-                _ExpenseRow(category: 'Food', perPerson: 180, total: 360),
-                _ExpenseRow(category: 'Travel', perPerson: 120, total: 240),
-                _ExpenseRow(category: 'Entry Fees', perPerson: 20, total: 40),
-              ],
-              totalPerPerson: 640,
-              grandTotal: 1280,
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () => NavigationUtils.pop(context),
-              icon: const Icon(Icons.check_rounded, size: 20),
-              label: const Text('Done'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // ── TOP BAR ──────────────────────────
+                    _TopBar(
+                      theme: theme,
+                      scheme: scheme,
+                      isDark: isDark,
+                      onBack: () => NavigationUtils.pop(context),
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    // ── PAGE TITLE ───────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Expense\nBreakdown',
+                            style: theme.textTheme.displaySmall?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF17395A),
+                              letterSpacing: -1.0,
+                              height: 1.1,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Trip to $city  •  $persons Traveler${persons == 1 ? '' : 's'}',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // ── CATEGORY TABLE ───────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _CategoryTable(
+                        rows: rows,
+                        theme: theme,
+                        scheme: scheme,
+                      ),
+                    ),
+
+                    const SizedBox(height: 14),
+
+                    // ── GRAND TOTAL CARD ─────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _GrandTotalCard(
+                        total: total,
+                        perPerson: perPerson,
+                        theme: theme,
+                        scheme: scheme,
+                      ),
+                    ),
+
+                    const SizedBox(height: 14),
+
+                    // ── BUDGET HEALTH CARD ───────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _BudgetHealthCard(
+                        percent: budgetPct,
+                        city: city,
+                        theme: theme,
+                        scheme: scheme,
+                      ),
+                    ),
+
+                    const SizedBox(height: 14),
+
+                    // ── POTENTIAL SAVINGS CARD ────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _PotentialSavingsCard(
+                        savings: savings,
+                        theme: theme,
+                        scheme: scheme,
+                      ),
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    // ── DONE BUTTON ──────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _DoneButton(
+                        onPressed: () => NavigationUtils.pop(context),
+                        scheme: scheme,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+            ),
+
+            // ── BOTTOM NAV ───────────────────────────
+            NavigationBar(
+              selectedIndex: _selectedNav,
+              onDestinationSelected: (i) {
+                setState(() => _selectedNav = i);
+                if (i == 0) {
+                  NavigationUtils.pushReplacementNamed(context, AppRoutes.home);
+                }
+                if (i == 1) {
+                  NavigationUtils.pop(context);
+                }
+              },
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.explore_outlined),
+                  selectedIcon: Icon(Icons.explore_rounded),
+                  label: 'Explore',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.event_note_outlined),
+                  selectedIcon: Icon(Icons.event_note_rounded),
+                  label: 'Itinerary',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.receipt_long_outlined),
+                  selectedIcon: Icon(Icons.receipt_long_rounded),
+                  label: 'Expenses',
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  TOP BAR  (pill — consistent with other screens)
+// ─────────────────────────────────────────────
+
+class _TopBar extends StatelessWidget {
+  const _TopBar({
+    required this.theme,
+    required this.scheme,
+    required this.isDark,
+    required this.onBack,
+  });
+
+  final ThemeData theme;
+  final ColorScheme scheme;
+  final bool isDark;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF161E28) : Colors.white,
+          borderRadius: BorderRadius.circular(50),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(isDark ? 0.3 : 0.07),
+              blurRadius: 18,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.flight_takeoff_rounded, color: scheme.primary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              AppConstants.topTittle,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.4,
+                color: scheme.onSurface,
+              ),
+            ),
+            const Spacer(),
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: scheme.primaryContainer,
+              child: Icon(
+                Icons.person_rounded,
+                size: 18,
+                color: scheme.onPrimaryContainer,
               ),
             ),
           ],
@@ -56,88 +355,504 @@ class ExpenseDetailScreen extends StatelessWidget {
   }
 }
 
-class _ExpenseRow {
-  const _ExpenseRow({
-    required this.category,
+// ─────────────────────────────────────────────
+//  DATA MODEL
+// ─────────────────────────────────────────────
+
+class _CategoryRow {
+  const _CategoryRow({
+    required this.icon,
+    required this.label,
     required this.perPerson,
     required this.total,
   });
 
-  final String category;
-  final double perPerson;
-  final double total;
+  final IconData icon;
+  final String label;
+  final int perPerson;
+  final int total;
 }
 
-class _ExpenseTable extends StatelessWidget {
-  const _ExpenseTable({
+// ─────────────────────────────────────────────
+//  CATEGORY TABLE
+// ─────────────────────────────────────────────
+
+class _CategoryTable extends StatelessWidget {
+  const _CategoryTable({
     required this.rows,
-    required this.totalPerPerson,
-    required this.grandTotal,
+    required this.theme,
+    required this.scheme,
   });
 
-  final List<_ExpenseRow> rows;
-  final double totalPerPerson;
-  final double grandTotal;
+  final List<_CategoryRow> rows;
+  final ThemeData theme;
+  final ColorScheme scheme;
 
-  static String _money(double v) => '\$${v.toStringAsFixed(0)}';
+  static const _primary = Color(0xFF17395A);
+  static const _iconBg = Color(0xFFE8F4FD);
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: Table(
-          columnWidths: const {
-            0: FlexColumnWidth(2),
-            1: FlexColumnWidth(1.2),
-            2: FlexColumnWidth(1.2),
-          },
-          children: [
-            // Header
-            TableRow(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              ),
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // ── HEADER ROW ────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            child: Row(
               children: [
-                _tableCell(context, 'Category', isHeader: true),
-                _tableCell(context, 'Per person', isHeader: true),
-                _tableCell(context, 'Total', isHeader: true),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    'CATEGORY',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'PER\nPERSON',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'TOTAL\nAMOUNT',
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: _primary,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.1,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
               ],
             ),
-            ...rows.map((r) => TableRow(
-                  children: [
-                    _tableCell(context, r.category),
-                    _tableCell(context, _money(r.perPerson)),
-                    _tableCell(context, _money(r.total)),
-                  ],
-                )),
-            // Total row
-            TableRow(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              ),
+          ),
+
+          Divider(
+            height: 1,
+            thickness: 0.5,
+            color: scheme.outlineVariant.withOpacity(0.4),
+          ),
+
+          // ── DATA ROWS ─────────────────────────
+          ...rows.asMap().entries.map((entry) {
+            final isLast = entry.key == rows.length - 1;
+            final r = entry.value;
+            return Column(
               children: [
-                _tableCell(context, 'Total', isHeader: true),
-                _tableCell(context, _money(totalPerPerson), isHeader: true),
-                _tableCell(context, _money(grandTotal), isHeader: true),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  child: Row(
+                    children: [
+                      // Icon
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _iconBg,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(r.icon, color: _primary, size: 20),
+                      ),
+                      const SizedBox(width: 10),
+
+                      // Label
+                      Expanded(
+                        flex: 3,
+                        child: Text(
+                          r.label,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+
+                      // Per person
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          _inr(r.perPerson),
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w500,
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+
+                      // Total — bold primary colour
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          _inr(r.total),
+                          textAlign: TextAlign.right,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: _primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!isLast)
+                  Divider(
+                    height: 1,
+                    thickness: 0.5,
+                    indent: 16,
+                    endIndent: 16,
+                    color: scheme.outlineVariant.withOpacity(0.3),
+                  ),
               ],
-            ),
-          ],
-        ),
+            );
+          }),
+        ],
       ),
     );
   }
+}
 
-  Widget _tableCell(BuildContext context, String text, {bool isHeader = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Text(
-        text,
-        style: isHeader
-            ? Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                )
-            : Theme.of(context).textTheme.bodyMedium,
+// ─────────────────────────────────────────────
+//  GRAND TOTAL CARD
+// ─────────────────────────────────────────────
+
+class _GrandTotalCard extends StatelessWidget {
+  const _GrandTotalCard({
+    required this.total,
+    required this.perPerson,
+    required this.theme,
+    required this.scheme,
+  });
+
+  final int? total;
+  final int? perPerson;
+  final ThemeData theme;
+  final ColorScheme scheme;
+
+  static const _primary = Color(0xFF17395A);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Labels
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GRAND TOTAL',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Including all regional taxes',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Amounts
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _inr(total),
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: _primary,
+                  letterSpacing: -1,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${_inr(perPerson)} per person',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF0077CC),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  BUDGET HEALTH CARD
+// ─────────────────────────────────────────────
+
+class _BudgetHealthCard extends StatelessWidget {
+  const _BudgetHealthCard({
+    required this.percent,
+    required this.city,
+    required this.theme,
+    required this.scheme,
+  });
+
+  final int percent;
+  final String city;
+  final ThemeData theme;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Circular progress indicator
+          SizedBox(
+            width: 64,
+            height: 64,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Background ring
+                SizedBox(
+                  width: 64,
+                  height: 64,
+                  child: CircularProgressIndicator(
+                    value: 1,
+                    strokeWidth: 6,
+                    color: const Color(0xFFE0EAF4),
+                  ),
+                ),
+                // Progress arc
+                SizedBox(
+                  width: 64,
+                  height: 64,
+                  child: CircularProgressIndicator(
+                    value: percent / 100,
+                    strokeWidth: 6,
+                    strokeCap: StrokeCap.round,
+                    color: const Color(0xFF17395A),
+                  ),
+                ),
+                Text(
+                  '$percent%',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF17395A),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(width: 16),
+
+          // Text
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Budget Health',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF17395A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'You are under your planned daily average for $city.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  POTENTIAL SAVINGS CARD
+// ─────────────────────────────────────────────
+
+class _PotentialSavingsCard extends StatelessWidget {
+  const _PotentialSavingsCard({
+    required this.savings,
+    required this.theme,
+    required this.scheme,
+  });
+
+  final double savings;
+  final ThemeData theme;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: scheme.outlineVariant.withOpacity(0.4)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Piggy bank icon
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F4FD),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(
+              Icons.savings_rounded,
+              size: 28,
+              color: Color(0xFF17395A),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Text(
+            'POTENTIAL SAVINGS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.3,
+            ),
+          ),
+
+          const SizedBox(height: 6),
+
+          Text(
+            _inr(savings > 0 ? savings : null),
+            style: theme.textTheme.headlineMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+              color: const Color(0xFF17395A),
+              letterSpacing: -1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  DONE BUTTON
+// ─────────────────────────────────────────────
+
+class _DoneButton extends StatelessWidget {
+  const _DoneButton({required this.onPressed, required this.scheme});
+
+  final VoidCallback onPressed;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(50),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF17395A), Color(0xFF0077CC)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0077CC).withOpacity(0.32),
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: FilledButton(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          minimumSize: const Size.fromHeight(54),
+          shape: const StadiumBorder(),
+        ),
+        child: const Text(
+          'Done',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+            color: Colors.white,
+          ),
+        ),
       ),
     );
   }
