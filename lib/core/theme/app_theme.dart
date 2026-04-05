@@ -1059,6 +1059,7 @@ class AppTheme {
         fontFamily: 'Inter', fontWeight: FontWeight.w600,
         fontSize: 14, color: _ltOnSurface,
       ),
+
       labelMedium: base.labelMedium?.copyWith(
         fontFamily: 'Inter', fontWeight: FontWeight.w600,
         fontSize: 12, color: _ltOnSurfaceVariant,

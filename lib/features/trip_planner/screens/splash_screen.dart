@@ -1,8 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui';
-
 import 'package:flutter/material.dart';
-
 import '../../../core/constants/app_constants.dart';
 import '../../../core/routes/app_routes.dart';
 import 'home_screen.dart';
