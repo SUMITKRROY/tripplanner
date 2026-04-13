@@ -1,528 +1,67 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../core/routes/app_routes.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/utils/navigation_utils.dart';
-import '../bloc/trip_planner_bloc.dart';
-import '../bloc/trip_planner_event.dart';
-import '../bloc/trip_planner_state.dart';
-import '../models/generate_trip_request_model.dart';
-import '../widgets/trip_bottom_sheets.dart';
 
-class _Destination {
-  final String name;
-  final String tag;
-  final List<Color> gradient;
-  const _Destination({
-    required this.name,
-    required this.tag,
-    required this.gradient,
-  });
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
+
+String formatBudgetINR(double v) {
+  if (v >= 100000) return '₹${(v / 100000).toStringAsFixed(1)}L';
+  if (v >= 1000) return '₹${(v / 1000).toStringAsFixed(0)}K';
+  return '₹${v.toStringAsFixed(0)}';
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
-  final _destinationController = TextEditingController();
-
-  int _selectedDays = 2;
-  int _selectedPersons = 2;
-  RangeValues _budgetRange = const RangeValues(10000, 50000);
-  bool _budgetEnabled = true;
-
-  int _selectedNavIndex = 0;
-  int _activeFilter = 0;
-
-  late final AnimationController _fadeCtrl;
-  late final Animation<double> _fadeAnim;
-
-  final _filters = const [
-    'Best by Season',
-    'Solo Friendly',
-    'Luxury Stays',
-    'Hidden Gems',
-  ];
-
-  final _trending = const [
-    _Destination(
-      name: 'Maldives Escape',
-      tag: 'TRENDING NOW',
-      gradient: [Color(0xFF0F4C75), Color(0xFF1B6CA8), Color(0xFF19A7CE)],
-    ),
-    _Destination(
-      name: 'Cinque Terre',
-      tag: 'CLASSIC EUROPE',
-      gradient: [Color(0xFF1A1A2E), Color(0xFF16213E), Color(0xFF0F3460)],
-    ),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _fadeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 700),
-    )..forward();
-    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-  }
-
-  @override
-  void dispose() {
-    _destinationController.dispose();
-    _fadeCtrl.dispose();
-    super.dispose();
-  }
-
-  // ── snack helper ─────────────────────────────
-  void _snack(String msg) {
-    final scheme = Theme.of(context).colorScheme;
-    final topInset = MediaQuery.of(context).padding.top + AppTheme.sp3;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            msg,
-            style: const TextStyle(
-              fontFamily: 'Manrope',
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: Colors.white,
-            ),
-          ),
-          backgroundColor: scheme.primary,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-          ),
-          duration: const Duration(seconds: 2),
-          margin: EdgeInsets.fromLTRB(AppTheme.sp4, topInset, AppTheme.sp4, 0),
-        ),
-      );
-  }
-
-  // ── bottom sheets ─────────────────────────────
-  void _openDuration() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => DurationSheet(
-        selected: _selectedDays,
-        onSelected: (d) {
-          setState(() => _selectedDays = d);
-          Navigator.pop(context);
-          _snack('🗓  $d ${d == 1 ? 'Day' : 'Days'} selected');
-        },
-      ),
-    );
-  }
-
-  void _openPersons() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => PersonSheet(
-        selected: _selectedPersons,
-        onSelected: (p) {
-          setState(() => _selectedPersons = p);
-          Navigator.pop(context);
-          _snack('👥  $p ${p == 1 ? 'Person' : 'Persons'} selected');
-        },
-      ),
-    );
-  }
-
-  void _openBudget() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => BudgetSheet(
-        range: _budgetRange,
-        enabled: _budgetEnabled,
-        onDone: (r, e) {
-          setState(() {
-            _budgetRange = r;
-            _budgetEnabled = e;
-          });
-        },
-      ),
-    );
-  }
-
-  void _analyzeTrip() {
-    if (_formKey.currentState?.validate() ?? false) {
-      final request = GenerateTripRequestModel(
-        city: _destinationController.text.trim(),
-        days: _selectedDays,
-        persons: _selectedPersons,
-        budget: _budgetEnabled ? _budgetRange.end.toInt() : null,
-      );
-      context.read<TripPlannerBloc>().add(TripPlannerGenerateTrip(request));
-      NavigationUtils.pushNamed(context, AppRoutes.loading);
-    }
-  }
-
-  void _onBottomNavTap(int index) {
-    if (index == 1) {
-      final hasTrip =
-          context.read<TripPlannerBloc>().state is TripPlannerSuccess;
-      if (!hasTrip) {
-        _snack('Please analyze trip first');
-        setState(() => _selectedNavIndex = 0);
-        return;
-      }
-      setState(() => _selectedNavIndex = index);
-      NavigationUtils.pushNamed(context, AppRoutes.tripResult);
-      return;
-    }
-    setState(() => _selectedNavIndex = index);
-  }
-
-  // ── build ─────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
-    final destinationFieldRadius = BorderRadius.circular(AppTheme.radiusFull);
-    final destinationOutline = BorderSide(
-      color: scheme.outlineVariant,
-      width: 1,
-    );
-
-    return Scaffold(
-      backgroundColor: scheme.surface,
-      body: SafeArea(
-        child: FadeTransition(
-          opacity: _fadeAnim,
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.sp4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: AppTheme.sp4),
-                      _TopBar(isDark: isDark),
-                      const SizedBox(height: AppTheme.sp6),
-
-                      // Greeting
-                      Text(
-                        'Good to see you, Traveler',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: scheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp2),
-                      RichText(
-                        text: TextSpan(
-                          style: theme.textTheme.headlineLarge?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            height: 1.15,
-                          ),
-                          children: [
-                            const TextSpan(text: 'Where will your\n'),
-                            TextSpan(
-                              text: 'curiosity',
-                              style: TextStyle(color: scheme.primary),
-                            ),
-                            const TextSpan(text: ' lead you?'),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp6),
-
-                      // Form
-                      Form(
-                        key: _formKey,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // Search
-                            TextFormField(
-                              controller: _destinationController,
-                              decoration: InputDecoration(
-                                hintText: 'Find your next adventure',
-                                prefixIcon: Icon(
-                                  Icons.search_rounded,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: destinationOutline,
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: destinationOutline,
-                                ),
-                                disabledBorder: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: BorderSide(
-                                    color: scheme.outlineVariant.withValues(
-                                      alpha: scheme.outlineVariant.a * 0.5,
-                                    ),
-                                    width: 1,
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: BorderSide(
-                                    color: scheme.primary,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                errorBorder: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: BorderSide(
-                                    color: scheme.error,
-                                    width: 1,
-                                  ),
-                                ),
-                                focusedErrorBorder: OutlineInputBorder(
-                                  borderRadius: destinationFieldRadius,
-                                  borderSide: BorderSide(
-                                    color: scheme.error,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                filled: true,
-                                fillColor: isDark
-                                    ? const Color(0xFF1C2530)
-                                    : Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: AppTheme.sp4,
-                                  vertical: AppTheme.sp3,
-                                ),
-                              ),
-                              validator: (v) => (v == null || v.trim().isEmpty)
-                                  ? 'Enter a destination'
-                                  : null,
-                            ),
-                            const SizedBox(height: AppTheme.sp3),
-
-                            // Duration
-                            _StatRow(
-                              icon: Icons.calendar_today_rounded,
-                              label: 'DURATION',
-                              value:
-                                  '$_selectedDays ${_selectedDays == 1 ? 'Day' : 'Days'}',
-                              isDark: isDark,
-                              onTap: _openDuration,
-                            ),
-                            const SizedBox(height: AppTheme.sp2),
-
-                            // Travelers
-                            _StatRow(
-                              icon: Icons.people_alt_rounded,
-                              label: 'TRAVELERS',
-                              value:
-                                  '$_selectedPersons ${_selectedPersons == 1 ? 'Person' : 'Persons'}',
-                              isDark: isDark,
-                              onTap: _openPersons,
-                            ),
-                            const SizedBox(height: AppTheme.sp2),
-
-                            // Budget
-                            _StatRow(
-                              icon: Icons.account_balance_wallet_rounded,
-                              label: 'BUDGET RANGE',
-                              value: _budgetEnabled
-                                  ? '${formatBudgetINR(_budgetRange.start)} – ${formatBudgetINR(_budgetRange.end)}'
-                                  : 'No limit',
-                              isDark: isDark,
-                              onTap: _openBudget,
-                              isOptional: true,
-                              optionalActive: _budgetEnabled,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp4),
-
-                      // Filters
-                      Text(
-                        'Quick Filters:',
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp2),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: List.generate(_filters.length, (i) {
-                            return Padding(
-                              padding: EdgeInsets.only(
-                                right: i < _filters.length - 1
-                                    ? AppTheme.sp2
-                                    : 0,
-                              ),
-                              child: _FilterChip(
-                                label: _filters[i],
-                                selected: _activeFilter == i,
-                                onTap: () => setState(() => _activeFilter = i),
-                                isDark: isDark,
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp6),
-
-                      // CTA
-                      TripGradientButton(
-                        label: 'Analyze Trip',
-                        icon: Icons.auto_awesome_rounded,
-                        isDark: isDark,
-                        onPressed: _analyzeTrip,
-                      ),
-                      const SizedBox(height: AppTheme.sp6),
-
-                      // Trending
-                      Text(
-                        'Trending Destinations',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp3),
-                      ..._trending.map(
-                        (d) => Padding(
-                          padding: const EdgeInsets.only(bottom: AppTheme.sp3),
-                          child: _TrendingCard(destination: d),
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.sp8),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-
-    );
-  }
-}
-
-// ═════════════════════════════════════════════
-//  STAT ROW (tappable)
-// ═════════════════════════════════════════════
-class _StatRow extends StatelessWidget {
-  const _StatRow({
-    required this.icon,
+class TripGradientButton extends StatelessWidget {
+  const TripGradientButton({
+    super.key,
     required this.label,
-    required this.value,
+    required this.icon,
     required this.isDark,
-    required this.onTap,
-    this.isOptional = false,
-    this.optionalActive = true,
+    required this.onPressed,
   });
-
-  final IconData icon;
   final String label;
-  final String value;
+  final IconData icon;
   final bool isDark;
-  final VoidCallback onTap;
-  final bool isOptional;
-  final bool optionalActive;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppTheme.sp4,
-          vertical: AppTheme.sp3 + 2,
-        ),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF161E28) : Colors.white,
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          border: Border.all(
-            color: isDark ? const Color(0x1AFFFFFF) : const Color(0xFFE5EAF0),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: scheme.primary, size: 20),
-            const SizedBox(width: AppTheme.sp3),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+        gradient: isDark
+            ? AppTheme.darkPrimaryButtonGradient
+            : AppTheme.lightPrimaryButtonGradient,
+        boxShadow: isDark ? AppTheme.darkPrimaryGlow : AppTheme.lightAquaGlow,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+          splashColor: Colors.white.withOpacity(0.15),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: AppTheme.sp4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      label,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                        letterSpacing: 1.2,
-                        fontSize: 10,
-                      ),
-                    ),
-                    if (isOptional) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: scheme.primary.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'OPTIONAL',
-                          style: TextStyle(
-                            fontFamily: 'Manrope',
-                            fontSize: 8,
-                            fontWeight: FontWeight.w700,
-                            color: scheme.primary,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 3),
+                Icon(icon, size: 20, color: Colors.white),
+                const SizedBox(width: AppTheme.sp2),
                 Text(
-                  value,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: isOptional && !optionalActive
-                        ? scheme.onSurfaceVariant
-                        : scheme.onSurface,
+                  label,
+                  style: const TextStyle(
+                    fontFamily: 'PlusJakartaSans',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.3,
                   ),
                 ),
               ],
             ),
-            const Spacer(),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: scheme.onSurfaceVariant,
-              size: 20,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -533,15 +72,15 @@ class _StatRow extends StatelessWidget {
 //  DURATION PICKER  (1 – 30 grid)
 // ═════════════════════════════════════════════
 class DurationSheet extends StatefulWidget {
-  const DurationSheet({required this.selected, required this.onSelected});
+  const DurationSheet({super.key, required this.selected, required this.onSelected});
   final int selected;
   final ValueChanged<int> onSelected;
 
   @override
-  State<DurationSheet> createState() => DurationSheetState();
+  State<DurationSheet> createState() => _DurationSheetState();
 }
 
-class DurationSheetState extends State<DurationSheet> {
+class _DurationSheetState extends State<DurationSheet> {
   late int _pick;
 
   @override
@@ -764,15 +303,15 @@ class _QuickDay extends StatelessWidget {
 //  PERSON PICKER
 // ═════════════════════════════════════════════
 class PersonSheet extends StatefulWidget {
-  const PersonSheet({required this.selected, required this.onSelected});
+  const PersonSheet({super.key, required this.selected, required this.onSelected});
   final int selected;
   final ValueChanged<int> onSelected;
 
   @override
-  State<PersonSheet> createState() => PersonSheetState();
+  State<PersonSheet> createState() => _PersonSheetState();
 }
 
-class PersonSheetState extends State<PersonSheet> {
+class _PersonSheetState extends State<PersonSheet> {
   late int _count;
 
   static const _presets = [
@@ -1011,6 +550,7 @@ class _CircleBtn extends StatelessWidget {
 // ═════════════════════════════════════════════
 class BudgetSheet extends StatefulWidget {
   const BudgetSheet({
+    super.key,
     required this.range,
     required this.enabled,
     required this.onDone,
@@ -1020,10 +560,10 @@ class BudgetSheet extends StatefulWidget {
   final void Function(RangeValues, bool) onDone;
 
   @override
-  State<BudgetSheet> createState() => BudgetSheetState();
+  State<BudgetSheet> createState() => _BudgetSheetState();
 }
 
-class BudgetSheetState extends State<BudgetSheet> {
+class _BudgetSheetState extends State<BudgetSheet> {
   late RangeValues _range;
   late bool _enabled;
 
@@ -1352,234 +892,6 @@ class _RangePill extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════
-//  SHARED WIDGETS
-// ═════════════════════════════════════════════
-
-class _TopBar extends StatelessWidget {
-  const _TopBar({required this.isDark});
-  final bool isDark;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppTheme.sp4,
-        vertical: AppTheme.sp3,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF161E28) : Colors.white,
-        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-        boxShadow: isDark ? AppTheme.darkCardShadow : AppTheme.lightCardShadow,
-      ),
-      child: Row(
-        children: [
-          Text(
-            'TripPlanner',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-              color: scheme.onSurface,
-            ),
-          ),
-          const Spacer(),
-          GestureDetector(
-            onTap: () {},
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: scheme.surfaceContainerLow,
-              ),
-              child: Icon(
-                Icons.notifications_none_rounded,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          const SizedBox(width: AppTheme.sp2),
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: scheme.primaryContainer,
-            child: Icon(
-              Icons.person_rounded,
-              size: 17,
-              color: scheme.onPrimaryContainer,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    required this.isDark,
-  });
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool isDark;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppTheme.sp4,
-          vertical: AppTheme.sp2,
-        ),
-        decoration: BoxDecoration(
-          color: selected
-              ? scheme.primary
-              : (isDark ? const Color(0xFF161E28) : Colors.white),
-          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
-          border: Border.all(
-            color: selected
-                ? Colors.transparent
-                : (isDark ? const Color(0x1AFFFFFF) : const Color(0xFFDDE3EA)),
-          ),
-          boxShadow: selected
-              ? (isDark ? AppTheme.darkPrimaryGlow : AppTheme.lightAquaGlow)
-              : null,
-        ),
-        child: Text(
-          label.toUpperCase(),
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: selected ? Colors.white : scheme.onSurfaceVariant,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            letterSpacing: 0.8,
-            fontSize: 11,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-
-class _TrendingCard extends StatelessWidget {
-  const _TrendingCard({required this.destination});
-  final _Destination destination;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-      child: AspectRatio(
-        aspectRatio: 16 / 9,
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: destination.gradient,
-            ),
-          ),
-          child: Stack(
-            children: [
-              Positioned(
-                top: -30,
-                right: -30,
-                child: Container(
-                  width: 160,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.04),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(AppTheme.sp4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppTheme.sp3,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(
-                          AppTheme.radiusFull,
-                        ),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.20),
-                        ),
-                      ),
-                      child: Text(
-                        destination.tag,
-                        style: const TextStyle(
-                          fontFamily: 'Manrope',
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white70,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      destination.name,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BottomNav extends StatelessWidget {
-  const _BottomNav({required this.selectedIndex, required this.onTap});
-  final int selectedIndex;
-  final ValueChanged<int> onTap;
-
-  static const _items = [
-    (Icons.explore_outlined, Icons.explore_rounded, 'Explore'),
-    (Icons.event_note_outlined, Icons.event_note_rounded, 'Itinerary'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return NavigationBar(
-      selectedIndex: selectedIndex,
-      onDestinationSelected: onTap,
-      destinations: _items
-          .map(
-            (e) => NavigationDestination(
-              icon: Icon(e.$1),
-              selectedIcon: Icon(e.$2),
-              label: e.$3,
-            ),
-          )
-          .toList(),
     );
   }
 }

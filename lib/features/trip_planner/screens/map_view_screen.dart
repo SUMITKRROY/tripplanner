@@ -8,9 +8,10 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
 import '../../../core/constants/app_constants.dart';
+import '../widgets/place_category_visual.dart';
 
 // ─────────────────────────────────────────────
-// Models
+// Models (unchanged, kept intact)
 // ─────────────────────────────────────────────
 
 class TripPlace {
@@ -76,9 +77,8 @@ class TripDay {
     day: (json['day'] as num).toInt(),
     theme: json['theme'] ?? '',
     description: json['description'] ?? '',
-    places: (json['places'] as List)
-        .map((p) => TripPlace.fromJson(p))
-        .toList(),
+    places:
+    (json['places'] as List).map((p) => TripPlace.fromJson(p)).toList(),
     totalTimeMin: (json['totalTimeMin'] as num?)?.toInt() ?? 0,
   );
 }
@@ -124,14 +124,12 @@ class MapViewScreen extends StatefulWidget {
     required this.city,
   });
 
-  /// Convenience factory – pass raw trip JSON map directly.
   factory MapViewScreen.fromJson(Map<String, dynamic> tripJson) {
     return MapViewScreen(
       tripDays: (tripJson['tripPlan'] as List)
           .map((d) => TripDay.fromJson(d))
           .toList(),
-      apiKey:
-          (tripJson['apiKey'] as String?) ?? AppConstants.googleMapsApiKey,
+      apiKey: (tripJson['apiKey'] as String?) ?? AppConstants.googleMapsApiKey,
       city: tripJson['city'] ?? 'Trip',
     );
   }
@@ -143,11 +141,12 @@ class MapViewScreen extends StatefulWidget {
 class _MapViewScreenState extends State<MapViewScreen>
     with TickerProviderStateMixin {
   GoogleMapController? _mapController;
-  final DraggableScrollableController _sheetDragController =
-      DraggableScrollableController();
+  final DraggableScrollableController _sheetCtrl =
+  DraggableScrollableController();
+
   int _selectedDayIndex = 0;
-  int _bottomTabIndex = 1;
   TripPlace? _selectedPlace;
+  int _selectedPlaceIndex = -1;
 
   // Map data
   final Map<String, Marker> _markers = {};
@@ -155,48 +154,43 @@ class _MapViewScreenState extends State<MapViewScreen>
   List<SegmentInfo> _segments = [];
   bool _loadingRoute = false;
 
-  // Marker label bitmaps cache
-  final Map<String, BitmapDescriptor> _labelCache = {};
+  // Caches
+  final Map<String, BitmapDescriptor> _markerCache = {};
 
-  // Animation controller for bottom sheet
-  late AnimationController _sheetController;
-  late Animation<double> _sheetAnimation;
+  // Animation for place card
+  late AnimationController _cardAnim;
+  late Animation<double> _cardScale;
+  late Animation<double> _cardFade;
 
-  // Color palette
-  static const Color _bgDark = Color(0xFF0D1117);
-  static const Color _accent = Color(0xFF00E5BE);
-  static const Color _accentWarm = Color(0xFFFF6B35);
-  static const Color _surface = Color(0xFF161B22);
-  static const Color _surfaceElevated = Color(0xFF21262D);
-  static const Color _textPrimary = Color(0xFFF0F6FC);
-  static const Color _textSecondary = Color(0xFF8B949E);
+  // Scroll controller for horizontal place list
+  final PageController _placePageCtrl = PageController(viewportFraction: 0.88);
 
-  static const List<Color> _markerColors = [
-    Color(0xFF00E5BE),
+  // Route colors per day
+  static const List<Color> _routeColors = [
+    Color(0xFF14B8A6),
     Color(0xFFFF6B35),
-    Color(0xFFFFD700),
-    Color(0xFFBE4BDB),
-    Color(0xFF4ECDC4),
+    Color(0xFF6366F1),
+    Color(0xFFEC4899),
   ];
 
   @override
   void initState() {
     super.initState();
-    _sheetController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 350),
-    );
-    _sheetAnimation = CurvedAnimation(
-      parent: _sheetController,
-      curve: Curves.easeOutCubic,
-    );
+    _cardAnim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 320));
+    _cardScale = Tween<double>(begin: 0.88, end: 1.0).animate(
+        CurvedAnimation(parent: _cardAnim, curve: Curves.easeOutBack));
+    _cardFade = Tween<double>(begin: 0, end: 1).animate(
+        CurvedAnimation(parent: _cardAnim, curve: Curves.easeOut));
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadDay(0));
   }
 
   @override
   void dispose() {
-    _sheetDragController.dispose();
-    _sheetController.dispose();
+    _sheetCtrl.dispose();
+    _cardAnim.dispose();
+    _placePageCtrl.dispose();
     _mapController?.dispose();
     super.dispose();
   }
@@ -207,12 +201,13 @@ class _MapViewScreenState extends State<MapViewScreen>
     setState(() {
       _selectedDayIndex = dayIndex;
       _selectedPlace = null;
+      _selectedPlaceIndex = -1;
       _markers.clear();
       _polylines.clear();
       _segments = [];
       _loadingRoute = true;
     });
-    _sheetController.reverse();
+    _cardAnim.reverse();
 
     final day = widget.tripDays[dayIndex];
     await _buildMarkers(day);
@@ -220,82 +215,133 @@ class _MapViewScreenState extends State<MapViewScreen>
     _fitBounds(day);
   }
 
-  // ── Marker creation ────────────────────────
+  // ── Marker creation (category icon) ────────
 
   Future<void> _buildMarkers(TripDay day) async {
     final newMarkers = <String, Marker>{};
-
     for (int i = 0; i < day.places.length; i++) {
       final place = day.places[i];
-      final label = '${i + 1}';
-      final color = _markerColors[i % _markerColors.length];
-
-      final icon = await _buildMarkerIcon(label, color);
-
+      final style = placeCategoryStyle(place.category);
+      final icon = await _buildCategoryMarker(style, i == 0, i == day.places.length - 1);
       newMarkers['place_$i'] = Marker(
         markerId: MarkerId('place_$i'),
         position: place.latLng,
         icon: icon,
-        onTap: () => _onMarkerTap(place),
+        anchor: const Offset(0.5, 1.0),
+        onTap: () => _onMarkerTap(place, i),
         infoWindow: InfoWindow.noText,
         zIndex: (day.places.length - i).toDouble(),
       );
     }
-
     if (mounted) setState(() => _markers.addAll(newMarkers));
   }
 
-  Future<BitmapDescriptor> _buildMarkerIcon(
-      String label, Color color) async {
-    if (_labelCache.containsKey('$label${color.value}')) {
-      return _labelCache['$label${color.value}']!;
+  Future<BitmapDescriptor> _buildCategoryMarker(
+      PlaceCategoryStyle style, bool isFirst, bool isLast) async {
+    final cacheKey =
+        '${style.imageAsset ?? style.emoji}_${style.color.value}_${isFirst}_$isLast';
+    if (_markerCache.containsKey(cacheKey)) return _markerCache[cacheKey]!;
+
+    ui.Image? assetImage;
+    final assetPath = style.imageAsset;
+    if (assetPath != null) {
+      try {
+        final data = await rootBundle.load(assetPath);
+        final codec =
+            await ui.instantiateImageCodec(data.buffer.asUint8List());
+        assetImage = (await codec.getNextFrame()).image;
+      } catch (_) {
+        assetImage = null;
+      }
     }
 
-    const double size = 120;
+    const double w = 130, h = 160;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
+    // ── Pin shape ──────────────────────────────────────────
+    final pinPath = Path();
+    const cx = w / 2;
+    const bubbleR = 52.0;
+    const tipY = h - 8.0;
+
+    // Circle bubble
+    pinPath.addOval(Rect.fromCircle(
+        center: const Offset(cx, bubbleR + 6), radius: bubbleR));
+    // Triangle pointer
+    pinPath
+      ..moveTo(cx - 18, bubbleR * 2 - 12)
+      ..lineTo(cx, tipY)
+      ..lineTo(cx + 18, bubbleR * 2 - 12)
+      ..close();
+
     // Drop shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.35)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawCircle(const Offset(size / 2, size / 2 + 4), 40, shadowPaint);
+      ..color = style.color.withOpacity(0.30)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+    canvas.drawPath(pinPath.shift(const Offset(0, 6)), shadowPaint);
 
-    // Outer ring
-    final ringPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(const Offset(size / 2, size / 2), 40, ringPaint);
+    // White halo
+    final haloPaint = Paint()..color = Colors.white;
+    canvas.drawCircle(
+        const Offset(cx, bubbleR + 6), bubbleR + 5, haloPaint);
 
-    // Fill
-    final fillPaint = Paint()..color = color;
-    canvas.drawCircle(const Offset(size / 2, size / 2), 35, fillPaint);
+    // Coloured background
+    final bgPaint = Paint()..color = style.bg;
+    canvas.drawPath(pinPath, bgPaint);
 
-    // Label text
-    final tp = TextPainter(
-      text: TextSpan(
-        text: label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 36,
-          fontWeight: FontWeight.bold,
+    // Coloured border
+    final borderPaint = Paint()
+      ..color = style.color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4;
+    canvas.drawPath(pinPath, borderPaint);
+
+    // First/last indicator ring
+    if (isFirst || isLast) {
+      final ringPaint = Paint()
+        ..color = isFirst ? const Color(0xFF14B8A6) : const Color(0xFFFF6B35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.5;
+      canvas.drawCircle(
+          const Offset(cx, bubbleR + 6), bubbleR - 2, ringPaint);
+    }
+
+    if (assetImage != null) {
+      const iconSide = 72.0;
+      final src = Rect.fromLTWH(
+          0, 0, assetImage.width.toDouble(), assetImage.height.toDouble());
+      final dst = Rect.fromCenter(
+        center: const Offset(cx, bubbleR + 6),
+        width: iconSide,
+        height: iconSide,
+      );
+      canvas.drawImageRect(
+        assetImage,
+        src,
+        dst,
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+      assetImage.dispose();
+    } else {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: style.emoji,
+          style: const TextStyle(fontSize: 44),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(
-      canvas,
-      Offset(size / 2 - tp.width / 2, size / 2 - tp.height / 2),
-    );
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas,
+          Offset(cx - tp.width / 2, bubbleR + 6 - tp.height / 2));
+    }
 
     final image = await recorder
         .endRecording()
-        .toImage(size.toInt(), size.toInt());
-    final bytes =
-    await image.toByteData(format: ui.ImageByteFormat.png);
-
-    final descriptor = BitmapDescriptor.fromBytes(
-      bytes!.buffer.asUint8List(),
-    );
-    _labelCache['$label${color.value}'] = descriptor;
+        .toImage(w.toInt(), h.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    final descriptor =
+    BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+    _markerCache[cacheKey] = descriptor;
     return descriptor;
   }
 
@@ -307,43 +353,48 @@ class _MapViewScreenState extends State<MapViewScreen>
       return;
     }
 
+    final routeColor = _routeColors[_selectedDayIndex % _routeColors.length];
     final List<SegmentInfo> segments = [];
     final List<Polyline> polylines = [];
 
     for (int i = 0; i < day.places.length - 1; i++) {
       final origin = day.places[i];
       final dest = day.places[i + 1];
-      final segColor = const Color(0xFF18C8F6);
-
       try {
         final info = await _getDirectionsSegment(origin.latLng, dest.latLng);
         segments.add(info);
-
+        // Glow effect: thick transparent + thin solid
+        polylines.add(Polyline(
+          polylineId: PolylineId('glow_$i'),
+          points: info.polylinePoints,
+          color: routeColor.withOpacity(0.18),
+          width: 14,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+        ));
         polylines.add(Polyline(
           polylineId: PolylineId('seg_$i'),
           points: info.polylinePoints,
-          color: segColor,
+          color: routeColor,
           width: 5,
-          patterns: [],
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
         ));
       } catch (_) {
-        // Fallback: straight line
-        segments.add(SegmentInfo(
-          distanceMeters: _haversineMeters(origin.latLng, dest.latLng),
+        final straight = SegmentInfo(
+          distanceMeters:
+          _haversineMeters(origin.latLng, dest.latLng),
           durationSeconds: 0,
           polylinePoints: [origin.latLng, dest.latLng],
-        ));
+        );
+        segments.add(straight);
         polylines.add(Polyline(
           polylineId: PolylineId('seg_$i'),
           points: [origin.latLng, dest.latLng],
-          color: segColor,
+          color: routeColor.withOpacity(0.6),
           width: 4,
-          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
+          patterns: [PatternItem.dash(20), PatternItem.gap(8)],
         ));
       }
     }
@@ -351,14 +402,10 @@ class _MapViewScreenState extends State<MapViewScreen>
     if (mounted) {
       setState(() {
         _segments = segments;
-        for (final p in polylines) {
-          _polylines[p.polylineId] = p;
-        }
+        for (final p in polylines) _polylines[p.polylineId] = p;
         _loadingRoute = false;
       });
-
-      // Add midpoint duration markers after segments are loaded
-      await _addDurationMarkers(day, segments);
+      await _addMidpointLabels(day, segments);
     }
   }
 
@@ -371,43 +418,30 @@ class _MapViewScreenState extends State<MapViewScreen>
           '&mode=driving'
           '&key=${widget.apiKey}',
     );
-
     final response = await http.get(url);
-    if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
-
+    if (response.statusCode != 200)
+      throw Exception('HTTP ${response.statusCode}');
     final data = jsonDecode(response.body);
     if (data['status'] != 'OK') throw Exception(data['status']);
-
     final leg = data['routes'][0]['legs'][0];
-    final distanceMeters = leg['distance']['value'] as int;
-    final durationSeconds = leg['duration']['value'] as int;
-
-    final encodedPolyline =
-    data['routes'][0]['overview_polyline']['points'] as String;
-    final points = _decodePolyline(encodedPolyline);
-
     return SegmentInfo(
-      distanceMeters: distanceMeters,
-      durationSeconds: durationSeconds,
-      polylinePoints: points,
+      distanceMeters: leg['distance']['value'] as int,
+      durationSeconds: leg['duration']['value'] as int,
+      polylinePoints:
+      _decodePolyline(data['routes'][0]['overview_polyline']['points']),
     );
   }
 
-  Future<void> _addDurationMarkers(
+  Future<void> _addMidpointLabels(
       TripDay day, List<SegmentInfo> segments) async {
-    final Map<String, Marker> durationMarkers = {};
-
+    final Map<String, Marker> dMarkers = {};
     for (int i = 0; i < segments.length; i++) {
-      final seg = segments[i];
-      final points = seg.polylinePoints;
-      if (points.isEmpty) continue;
-
-      // Pick midpoint of polyline
-      final mid = points[points.length ~/ 2];
-      final icon =
-      await _buildDurationIcon(seg.durationLabel, seg.distanceLabel);
-
-      durationMarkers['dur_$i'] = Marker(
+      final pts = segments[i].polylinePoints;
+      if (pts.isEmpty) continue;
+      final mid = pts[pts.length ~/ 2];
+      final icon = await _buildTravelChip(
+          segments[i].durationLabel, segments[i].distanceLabel);
+      dMarkers['dur_$i'] = Marker(
         markerId: MarkerId('dur_$i'),
         position: mid,
         icon: icon,
@@ -417,151 +451,142 @@ class _MapViewScreenState extends State<MapViewScreen>
         onTap: () {},
       );
     }
-
-    if (mounted) setState(() => _markers.addAll(durationMarkers));
+    if (mounted) setState(() => _markers.addAll(dMarkers));
   }
 
-  Future<BitmapDescriptor> _buildDurationIcon(
+  Future<BitmapDescriptor> _buildTravelChip(
       String duration, String distance) async {
-    final key = '$duration|$distance';
-    if (_labelCache.containsKey(key)) return _labelCache[key]!;
-
-    const double w = 220, h = 70;
+    final key = 'chip_$duration|$distance';
+    if (_markerCache.containsKey(key)) return _markerCache[key]!;
+    const double w = 200, h = 60;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-
     final rrect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(0, 0, w, h),
-      const Radius.circular(14),
-    );
-
+        const Rect.fromLTWH(0, 0, w, h), const Radius.circular(30));
     // Shadow
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.4)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
     canvas.drawRRect(
-        rrect.shift(const Offset(0, 3)), shadowPaint);
-
-    // Background
-    final bgPaint = Paint()..color = const Color(0xF0161B22);
-    canvas.drawRRect(rrect, bgPaint);
-
-    // Border
-    final borderPaint = Paint()
-      ..color = const Color(0xFF00E5BE)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    canvas.drawRRect(rrect, borderPaint);
-
-    // Duration text
+        rrect.shift(const Offset(0, 3)),
+        Paint()
+          ..color = Colors.black26
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+    // White pill
+    canvas.drawRRect(rrect, Paint()..color = Colors.white);
+    // Left accent
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            const Rect.fromLTWH(0, 0, 8, 60), const Radius.circular(30)),
+        Paint()..color = const Color(0xFF14B8A6));
+    // Duration
     final tp1 = TextPainter(
       text: TextSpan(
-        text: duration,
-        style: const TextStyle(
-          color: Color(0xFF00E5BE),
-          fontSize: 26,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
+          text: duration,
+          style: const TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 24,
+              fontWeight: FontWeight.w800)),
       textDirection: TextDirection.ltr,
     )..layout();
-    tp1.paint(canvas, Offset(16, h / 2 - tp1.height / 2));
-
-    // Divider
-    final divPaint = Paint()
-      ..color = const Color(0xFF8B949E)
-      ..strokeWidth = 1.5;
+    tp1.paint(canvas, Offset(18, h / 2 - tp1.height / 2));
+    // Separator
     canvas.drawLine(
-        Offset(16 + tp1.width + 10, 14),
-        Offset(16 + tp1.width + 10, h - 14),
-        divPaint);
-
-    // Distance text
+        Offset(22 + tp1.width, 14),
+        Offset(22 + tp1.width, h - 14),
+        Paint()
+          ..color = const Color(0xFFE2E8F0)
+          ..strokeWidth = 1.5);
+    // Distance
     final tp2 = TextPainter(
       text: TextSpan(
-        text: distance,
-        style: const TextStyle(
-          color: Color(0xFF8B949E),
-          fontSize: 22,
-        ),
-      ),
+          text: distance,
+          style: const TextStyle(
+              color: Color(0xFF64748B), fontSize: 20)),
       textDirection: TextDirection.ltr,
     )..layout();
     tp2.paint(
-        canvas,
-        Offset(16 + tp1.width + 20,
-            h / 2 - tp2.height / 2));
-
+        canvas, Offset(30 + tp1.width, h / 2 - tp2.height / 2));
     final image = await recorder
         .endRecording()
         .toImage(w.toInt(), h.toInt());
     final bytes =
     await image.toByteData(format: ui.ImageByteFormat.png);
-
-    final descriptor =
-    BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
-    _labelCache[key] = descriptor;
-    return descriptor;
+    final d = BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+    _markerCache[key] = d;
+    return d;
   }
 
   // ── Camera ─────────────────────────────────
 
   void _fitBounds(TripDay day) {
     if (_mapController == null || day.places.isEmpty) return;
-
-    double minLat = double.infinity, maxLat = -double.infinity;
-    double minLng = double.infinity, maxLng = -double.infinity;
-
+    double minLat = double.infinity,
+        maxLat = -double.infinity,
+        minLng = double.infinity,
+        maxLng = -double.infinity;
     for (final p in day.places) {
       minLat = math.min(minLat, p.lat);
       maxLat = math.max(maxLat, p.lat);
       minLng = math.min(minLng, p.lng);
       maxLng = math.max(maxLng, p.lng);
     }
-
-    _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(minLat - 0.01, minLng - 0.01),
-          northeast: LatLng(maxLat + 0.01, maxLng + 0.01),
-        ),
-        120,
+    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(
+      LatLngBounds(
+        southwest: LatLng(minLat - 0.012, minLng - 0.012),
+        northeast: LatLng(maxLat + 0.012, maxLng + 0.012),
       ),
-    );
+      110,
+    ));
   }
 
   // ── Interactions ───────────────────────────
 
-  void _onMarkerTap(TripPlace place) {
+  void _onMarkerTap(TripPlace place, int index) {
     setState(() {
       _selectedPlace = place;
-      _bottomTabIndex = _selectedDayIndex + 1;
+      _selectedPlaceIndex = index;
     });
-    _sheetController.forward();
-    _mapController?.animateCamera(
-      CameraUpdate.newCameraPosition(
-        CameraPosition(
-          target: LatLng(place.lat - 0.003, place.lng),
+    _cardAnim.forward(from: 0);
+    // Snap sheet to mid
+    if (_sheetCtrl.isAttached) {
+      _sheetCtrl.animateTo(0.48,
+          duration: const Duration(milliseconds: 380),
+          curve: Curves.easeOutCubic);
+    }
+    // Scroll page view
+    _placePageCtrl.animateToPage(index,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic);
+    // Move camera
+    _mapController?.animateCamera(CameraUpdate.newCameraPosition(
+      CameraPosition(
+          target: LatLng(place.lat - 0.004, place.lng),
           zoom: 15.5,
-          tilt: 30,
-        ),
-      ),
-    );
+          tilt: 35,
+          bearing: 10),
+    ));
   }
 
-  void _closeSheet() {
-    _sheetController.reverse().then((_) {
-      if (mounted) setState(() => _selectedPlace = null);
+  void _dismissSelection() {
+    setState(() {
+      _selectedPlace = null;
+      _selectedPlaceIndex = -1;
     });
+    _cardAnim.reverse();
   }
 
   // ── Utility ────────────────────────────────
 
+  TripDay get _currentDay => widget.tripDays[_selectedDayIndex];
+
+  String _formatDuration(int minutes) {
+    if (minutes < 60) return '${minutes}m';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
   List<LatLng> _decodePolyline(String encoded) {
     final List<LatLng> points = [];
-    int index = 0;
-    int lat = 0, lng = 0;
-
+    int index = 0, lat = 0, lng = 0;
     while (index < encoded.length) {
       int shift = 0, result = 0, b;
       do {
@@ -570,7 +595,6 @@ class _MapViewScreenState extends State<MapViewScreen>
         shift += 5;
       } while (b >= 0x20);
       lat += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
-
       shift = 0;
       result = 0;
       do {
@@ -579,7 +603,6 @@ class _MapViewScreenState extends State<MapViewScreen>
         shift += 5;
       } while (b >= 0x20);
       lng += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
-
       points.add(LatLng(lat / 1e5, lng / 1e5));
     }
     return points;
@@ -589,651 +612,618 @@ class _MapViewScreenState extends State<MapViewScreen>
     const r = 6371000.0;
     final dLat = _deg2rad(b.latitude - a.latitude);
     final dLng = _deg2rad(b.longitude - a.longitude);
-    final sinLat = math.sin(dLat / 2);
-    final sinLng = math.sin(dLng / 2);
-    final c = sinLat * sinLat +
+    final s = math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(_deg2rad(a.latitude)) *
             math.cos(_deg2rad(b.latitude)) *
-            sinLng *
-            sinLng;
-    return (r * 2 * math.atan2(math.sqrt(c), math.sqrt(1 - c))).round();
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return (r * 2 * math.atan2(math.sqrt(s), math.sqrt(1 - s))).round();
   }
 
-  double _deg2rad(double deg) => deg * math.pi / 180;
-
-  String _formatDuration(int minutes) {
-    if (minutes < 60) return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
+  double _deg2rad(double d) => d * math.pi / 180;
 
   // ── Build ──────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final day = widget.tripDays[_selectedDayIndex];
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final day = _currentDay;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: SystemUiOverlayStyle.dark,
       child: Scaffold(
         backgroundColor: scheme.surface,
         extendBodyBehindAppBar: true,
-        body: Stack(
-          children: [
-            // ── Google Map ──────────────────
-            GoogleMap(
-              onMapCreated: (ctrl) {
-                _mapController = ctrl;
-                _fitBounds(day);
-              },
-              initialCameraPosition: CameraPosition(
-                target: day.places.isNotEmpty
-                    ? day.places.first.latLng
-                    : const LatLng(10.0, 76.2),
-                zoom: 12,
-              ),
-              mapType: MapType.normal,
-              markers: Set<Marker>.of(_markers.values),
-              polylines: Set<Polyline>.of(_polylines.values),
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              compassEnabled: true,
-              mapToolbarEnabled: false,
-              onTap: (_) => _closeSheet(),
-            ),
-
-            // ── Top bar ─────────────────────
-            SafeArea(
-              child: Column(
-                children: [
-                  _buildTopBar(context, theme, scheme),
-                ],
-              ),
-            ),
-
-            // // ── Route summary strip ─────────
-            // if (_segments.isNotEmpty)
-            //   Positioned(
-            //     left: 16,
-            //     right: 16,
-            //     bottom: 190,
-            //     child: _buildRouteSummary(day),
-            //   ),
-
-            // ── Loading overlay ─────────────
-            if (_loadingRoute)
-              const Positioned.fill(
-                child: _LoadingOverlay(),
+        body: GestureDetector(
+          onTap: _dismissSelection,
+          behavior: HitTestBehavior.translucent,
+          child: Stack(
+            children: [
+              // ── Google Map ──────────────────────
+              Positioned.fill(
+                child: GoogleMap(
+                  onMapCreated: (ctrl) {
+                    _mapController = ctrl;
+                    _fitBounds(day);
+                  },
+                  initialCameraPosition: CameraPosition(
+                    target: day.places.isNotEmpty
+                        ? day.places.first.latLng
+                        : const LatLng(10.0, 76.2),
+                    zoom: 12,
+                  ),
+                  mapType: MapType.normal,
+                  markers: Set<Marker>.of(_markers.values),
+                  polylines: Set<Polyline>.of(_polylines.values),
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                  compassEnabled: false,
+                  mapToolbarEnabled: false,
+                  onTap: (_) => _dismissSelection(),
+                ),
               ),
 
-            // ── Bottom sheet with tabs ──────
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildBottomSheet(theme, scheme),
-            ),
-          ],
+              // ── Top gradient scrim ───────────────
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 160,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.white.withOpacity(0.92),
+                          Colors.white.withOpacity(0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Top bar ─────────────────────────
+              SafeArea(child: _TopBar(city: widget.city, onBack: () => Navigator.of(context).maybePop(), onRecenter: () => _fitBounds(day))),
+
+              // ── Day selector pills ───────────────
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 72,
+                left: 0,
+                right: 0,
+                child: _DayPills(
+                  days: widget.tripDays,
+                  selectedIndex: _selectedDayIndex,
+                  onSelect: _loadDay,
+                  routeColors: _routeColors,
+                ),
+              ),
+
+              // ── Loading overlay ──────────────────
+              if (_loadingRoute) const _LoadingOverlay(),
+
+              // ── Bottom draggable sheet ───────────
+              DraggableScrollableSheet(
+                controller: _sheetCtrl,
+                initialChildSize: 0.28,
+                minChildSize: 0.14,
+                maxChildSize: 0.85,
+                snap: true,
+                snapSizes: const [0.14, 0.28, 0.48, 0.85],
+                builder: (ctx, scrollCtrl) =>
+                    _BottomSheet(
+                      scrollController: scrollCtrl,
+                      sheetController: _sheetCtrl,
+                      day: _currentDay,
+                      selectedPlace: _selectedPlace,
+                      selectedIndex: _selectedPlaceIndex,
+                      placePageCtrl: _placePageCtrl,
+                      cardAnim: _cardAnim,
+                      cardScale: _cardScale,
+                      cardFade: _cardFade,
+                      segments: _segments,
+                      onPlaceTap: _onMarkerTap,
+                      formatDuration: _formatDuration,
+                      onDismiss: _dismissSelection,
+                    ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
+}
 
-  // ── Sub widgets ────────────────────────────
+// ─────────────────────────────────────────────
+// Top Bar
+// ─────────────────────────────────────────────
 
-  Widget _buildTopBar(
-    BuildContext context,
-    ThemeData theme,
-    ColorScheme scheme,
-  ) {
+class _TopBar extends StatelessWidget {
+  final String city;
+  final VoidCallback onBack;
+  final VoidCallback onRecenter;
+
+  const _TopBar({
+    required this.city,
+    required this.onBack,
+    required this.onRecenter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          Material(
-            color: scheme.surface.withOpacity(0.92),
-            shape: const CircleBorder(),
-            elevation: 1,
-            child: IconButton(
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: Icon(Icons.arrow_back_rounded, color: scheme.onSurface),
-            ),
-          ),
-          const SizedBox(width: 12),
+          _MapButton(onTap: onBack, icon: Icons.arrow_back_rounded),
+          const SizedBox(width: 10),
           Expanded(
             child: Container(
               padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               decoration: BoxDecoration(
-                color: scheme.surface.withOpacity(0.93),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: scheme.outlineVariant.withOpacity(0.45),
-                ),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.09),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4))
+                ],
               ),
               child: Row(
                 children: [
-                  Icon(Icons.location_on_rounded, color: scheme.primary, size: 16),
+                  const Icon(Icons.location_on_rounded,
+                      color: Color(0xFF14B8A6), size: 17),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      widget.city,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        color: scheme.onSurface,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      city,
+                      style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0F172A),
+                          letterSpacing: -0.3),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  const Icon(Icons.search_rounded,
+                      color: Color(0xFF94A3B8), size: 18),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          Material(
-            color: scheme.surface.withOpacity(0.92),
-            shape: const CircleBorder(),
-            elevation: 1,
-            child: IconButton(
-              onPressed: () => _fitBounds(day),
-              icon: Icon(Icons.fit_screen_rounded, color: scheme.onSurface),
-            ),
-          ),
+          const SizedBox(width: 10),
+          _MapButton(onTap: onRecenter, icon: Icons.my_location_rounded),
         ],
       ),
     );
   }
+}
 
-  TripDay get day => widget.tripDays[_selectedDayIndex];
+class _MapButton extends StatelessWidget {
+  final VoidCallback onTap;
+  final IconData icon;
+  const _MapButton({required this.onTap, required this.icon});
 
-  Widget _buildBottomSheet(ThemeData theme, ColorScheme scheme) {
-    final tabs = <String>['Overview', ...widget.tripDays.map((d) => 'Day ${d.day}')];
-
-    return DraggableScrollableSheet(
-      controller: _sheetDragController,
-      initialChildSize: 0.26,
-      minChildSize: 0.20,
-      maxChildSize: 0.82,
-      snap: true,
-      snapSizes: const [0.26, 0.5, 0.82],
-      builder: (context, scrollController) => GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          if (_sheetDragController.isAttached) {
-            _sheetDragController.animateTo(
-              0.82,
-              duration: const Duration(milliseconds: 260),
-              curve: Curves.easeOutCubic,
-            );
-          }
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 20,
-                offset: const Offset(0, -4),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 42,
-              height: 5,
-              decoration: BoxDecoration(
-                color: scheme.outlineVariant,
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 42,
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                scrollDirection: Axis.horizontal,
-                itemBuilder: (_, i) {
-                  final selected = i == _bottomTabIndex;
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () {
-                      setState(() => _bottomTabIndex = i);
-                      if (i > 0) _loadDay(i - 1);
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: selected ? scheme.surfaceContainerHighest : Colors.transparent,
-                        borderRadius: BorderRadius.circular(12),
-                        border: selected
-                            ? Border(
-                                bottom: BorderSide(color: scheme.primary, width: 3),
-                              )
-                            : null,
-                      ),
-                      child: Text(
-                        tabs[i],
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                          color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-                separatorBuilder: (_, __) => const SizedBox(width: 4),
-                itemCount: tabs.length,
-              ),
-            ),
-            Divider(height: 1, color: scheme.outlineVariant.withOpacity(0.7)),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                  child: _bottomTabIndex == 0
-                      ? _buildOverviewContent(theme, scheme, scrollController)
-                      : _buildDayContent(
-                          theme,
-                          scheme,
-                          widget.tripDays[_bottomTabIndex - 1],
-                          scrollController,
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.10),
+              blurRadius: 12,
+              offset: const Offset(0, 3))
+        ],
       ),
-    );
-  }
+      child: Icon(icon, color: const Color(0xFF0F172A), size: 20),
+    ),
+  );
+}
 
-  Widget _buildOverviewContent(
-    ThemeData theme,
-    ColorScheme scheme,
-    ScrollController scrollController,
-  ) {
-    return ListView(
-      controller: scrollController,
-      children: [
-        Text(
-          'Trip Overview',
-          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: widget.tripDays
-              .map(
-                (d) => Chip(
-                  label: Text('Day ${d.day} • ${d.places.length} stops'),
-                  backgroundColor: scheme.surfaceContainerHigh,
-                  side: BorderSide.none,
-                ),
-              )
-              .toList(),
-        ),
-      ],
-    );
-  }
+// ─────────────────────────────────────────────
+// Day Selector Pills
+// ─────────────────────────────────────────────
 
-  Widget _buildDayContent(
-    ThemeData theme,
-    ColorScheme scheme,
-    TripDay selectedDay,
-    ScrollController scrollController,
-  ) {
-    return ListView(
-      controller: scrollController,
-      //crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(
-              'Day ${selectedDay.day}',
-              style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(width: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+class _DayPills extends StatelessWidget {
+  final List<TripDay> days;
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+  final List<Color> routeColors;
+
+  const _DayPills({
+    required this.days,
+    required this.selectedIndex,
+    required this.onSelect,
+    required this.routeColors,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: days.length,
+        itemBuilder: (_, i) {
+          final selected = i == selectedIndex;
+          final color = routeColors[i % routeColors.length];
+          return GestureDetector(
+            onTap: () => onSelect(i),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              margin: const EdgeInsets.only(right: 8),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest,
+                color: selected ? color : Colors.white,
                 borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: selected
+                        ? color.withOpacity(0.35)
+                        : Colors.black.withOpacity(0.07),
+                    blurRadius: selected ? 14 : 8,
+                    offset: const Offset(0, 3),
+                  )
+                ],
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.swap_vert, size: 16, color: scheme.primary),
-                  const SizedBox(width: 6),
-                  Text('Optimize', style: theme.textTheme.titleMedium),
+                  if (!selected)
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration:
+                      BoxDecoration(color: color, shape: BoxShape.circle),
+                    ),
+                  Text(
+                    'Day ${days[i].day}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? Colors.white : const Color(0xFF0F172A),
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '· ${days[i].places.length}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: selected
+                          ? Colors.white.withOpacity(0.75)
+                          : const Color(0xFF94A3B8),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(
-          selectedDay.theme,
-          style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 10),
-        ...List.generate(selectedDay.places.length, (i) {
-          final p = selectedDay.places[i];
-          return ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: CircleAvatar(
-              radius: 14,
-              backgroundColor: scheme.primaryContainer,
-              child: Text('${i + 1}', style: TextStyle(color: scheme.onPrimaryContainer)),
-            ),
-            title: Text(
-              p.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            subtitle: Text(
-              p.category,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: Icon(Icons.chevron_right_rounded, color: scheme.onSurfaceVariant),
-            onTap: () => _onMarkerTap(p),
           );
-        }),
-      ],
+        },
+      ),
     );
   }
+}
 
-  Widget _buildRouteSummary(TripDay day) {
-    double totalKm = 0;
-    int totalTravelMins = 0;
-    for (final s in _segments) {
-      totalKm += s.distanceMeters / 1000;
-      totalTravelMins += (s.durationSeconds / 60).round();
-    }
+// ─────────────────────────────────────────────
+// Bottom Sheet
+// ─────────────────────────────────────────────
+
+class _BottomSheet extends StatelessWidget {
+  final ScrollController scrollController;
+  final DraggableScrollableController sheetController;
+  final TripDay day;
+  final TripPlace? selectedPlace;
+  final int selectedIndex;
+  final PageController placePageCtrl;
+  final AnimationController cardAnim;
+  final Animation<double> cardScale;
+  final Animation<double> cardFade;
+  final List<SegmentInfo> segments;
+  final void Function(TripPlace, int) onPlaceTap;
+  final String Function(int) formatDuration;
+  final VoidCallback onDismiss;
+
+  const _BottomSheet({
+    required this.scrollController,
+    required this.sheetController,
+    required this.day,
+    required this.selectedPlace,
+    required this.selectedIndex,
+    required this.placePageCtrl,
+    required this.cardAnim,
+    required this.cardScale,
+    required this.cardFade,
+    required this.segments,
+    required this.onPlaceTap,
+    required this.formatDuration,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: _surface.withOpacity(0.92),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Stop pills
-          SizedBox(
-            height: 32,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: day.places.length + (day.places.length - 1),
-              itemBuilder: (_, i) {
-                if (i.isEven) {
-                  final placeIdx = i ~/ 2;
-                  final label = '${placeIdx + 1}';
-                  final color =
-                  _markerColors[placeIdx % _markerColors.length];
-                  return _StopPill(label: label, color: color);
-                } else {
-                  final segIdx = i ~/ 2;
-                  if (segIdx < _segments.length) {
-                    return _SegmentArrow(
-                        label: _segments[segIdx].durationLabel);
-                  }
-                  return const SizedBox();
-                }
-              },
-            ),
-          ),
-          const SizedBox(height: 10),
-          // Totals
-          Row(
-            children: [
-              _SummaryChip(
-                icon: Icons.straighten_rounded,
-                value: '${totalKm.toStringAsFixed(1)} km',
-                color: _accent,
-              ),
-              const SizedBox(width: 8),
-              _SummaryChip(
-                icon: Icons.drive_eta_rounded,
-                value: _formatDuration(totalTravelMins),
-                color: _accentWarm,
-              ),
-              const SizedBox(width: 8),
-              _SummaryChip(
-                icon: Icons.place_rounded,
-                value: '${day.places.length} stops',
-                color: const Color(0xFFFFD700),
-              ),
-            ],
-          ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+        boxShadow: [
+          BoxShadow(
+              color: Color(0x1A000000), blurRadius: 40, offset: Offset(0, -8))
         ],
       ),
-    );
-  }
-
-  Widget _buildPlaceSheet(TripPlace place, TripDay day) {
-    final idx = day.places.indexOf(place);
-    final label = idx >= 0 ? '${idx + 1}' : '?';
-    final color = idx >= 0
-        ? _markerColors[idx % _markerColors.length]
-        : _accent;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle
-          Container(
-            margin: const EdgeInsets.only(top: 10),
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header row
-                Row(
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: color.withOpacity(0.4)),
-                      ),
-                      child: Center(
-                        child: Text(
-                          label,
-                          style: TextStyle(
-                            color: color,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
+          // ── Handle + header ──────────────────────────
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (sheetController.isAttached) {
+                final current = sheetController.size;
+                sheetController.animateTo(
+                  current < 0.45 ? 0.85 : 0.28,
+                  duration: const Duration(milliseconds: 380),
+                  curve: Curves.easeOutCubic,
+                );
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: Column(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(3),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            place.name,
-                            style: const TextStyle(
-                              color: _textPrimary,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Icon(Icons.category_rounded,
-                                  size: 12, color: color),
-                              const SizedBox(width: 4),
-                              Text(
-                                place.category,
-                                style: TextStyle(
-                                    color: color, fontSize: 11.5),
-                              ),
-                              const SizedBox(width: 10),
-                              const Icon(Icons.star_rounded,
-                                  size: 12,
-                                  color: Color(0xFFFFD700)),
-                              const SizedBox(width: 3),
-                              Text(
-                                place.rating.toStringAsFixed(1),
-                                style: const TextStyle(
-                                    color: Color(0xFFFFD700),
-                                    fontSize: 11.5),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: _closeSheet,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: _surfaceElevated,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(Icons.close_rounded,
-                            color: _textSecondary, size: 16),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-
-                // Stat row
-                Row(
-                  children: [
-                    _InfoChip(
-                      icon: Icons.access_time_rounded,
-                      text: _formatDuration(place.durationMin),
-                    ),
-                    const SizedBox(width: 8),
-                    _InfoChip(
-                      icon: Icons.wb_sunny_rounded,
-                      text: place.bestTime,
-                    ),
-                    const SizedBox(width: 8),
-                    _InfoChip(
-                      icon: Icons.attach_money_rounded,
-                      text: place.entryFee == 0
-                          ? 'Free Entry'
-                          : '₹${place.entryFee}',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Description
-                Text(
-                  place.description,
-                  style: const TextStyle(
-                    color: _textSecondary,
-                    fontSize: 13,
-                    height: 1.5,
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 10),
-
-                // Tip
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: _accentWarm.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: _accentWarm.withOpacity(0.2)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 14),
+                  Row(
                     children: [
-                      const Icon(Icons.tips_and_updates_rounded,
-                          color: _accentWarm, size: 15),
-                      const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          place.tips,
-                          style: const TextStyle(
-                            color: _accentWarm,
-                            fontSize: 12.5,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              day.theme.isNotEmpty ? day.theme : 'Day ${day.day}',
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0F172A),
+                                letterSpacing: -0.4,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${day.places.length} destinations  ·  ${segments.isNotEmpty ? _totalTime() : "–"} drive',
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                color: Color(0xFF94A3B8),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ),
+                      ),
+                      // Category legend dots
+                      Wrap(
+                        spacing: 4,
+                        children: day.places
+                            .take(4)
+                            .map((p) {
+                          final style = placeCategoryStyle(p.category);
+                          return Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                                color: style.bg,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: style.color.withOpacity(0.3),
+                                    width: 1.5)),
+                            child: Center(
+                              child: PlaceCategoryGlyph(style: style, size: 15),
+                            ),
+                          );
+                        })
+                            .toList(),
                       ),
                     ],
                   ),
-                ),
+                ],
+              ),
+            ),
+          ),
 
-                // Coordinates
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Icon(Icons.my_location_rounded,
-                        size: 12, color: _textSecondary),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${place.lat.toStringAsFixed(6)}, '
-                          '${place.lng.toStringAsFixed(6)}',
-                      style: const TextStyle(
-                        color: _textSecondary,
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _accent.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                            color: _accent.withOpacity(0.3)),
-                      ),
-                      child: Text(
-                        place.openingHours,
-                        style: TextStyle(
-                          color: place.openingHours
-                              .contains('Open')
-                              ? _accent
-                              : _textSecondary,
-                          fontSize: 10,
+          const SizedBox(height: 12),
+          Divider(height: 1, color: const Color(0xFFF1F5F9)),
+          const SizedBox(height: 8),
+
+          // ── Scrollable body ────────────────────────
+          Expanded(
+            child: ListView(
+              controller: scrollController,
+              padding: EdgeInsets.zero,
+              physics: const BouncingScrollPhysics(),
+              children: [
+                // ── Selected place big card ──────────
+                if (selectedPlace != null)
+                  AnimatedBuilder(
+                    animation: cardAnim,
+                    builder: (_, __) => Opacity(
+                      opacity: cardFade.value,
+                      child: Transform.scale(
+                        scale: cardScale.value,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          child: _PlaceDetailCard(
+                            place: selectedPlace!,
+                            index: selectedIndex,
+                            formatDuration: formatDuration,
+                            onDismiss: onDismiss,
+                          ),
                         ),
                       ),
                     ),
-                  ],
+                  ),
+
+                // ── Horizontal place card strip ──────
+                SizedBox(
+                  height: 130,
+                  child: PageView.builder(
+                    controller: placePageCtrl,
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: day.places.length,
+                    onPageChanged: (i) =>
+                        onPlaceTap(day.places[i], i),
+                    itemBuilder: (_, i) {
+                      final p = day.places[i];
+                      final style = placeCategoryStyle(p.category);
+                      final isSelected = i == selectedIndex;
+                      return AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        margin: const EdgeInsets.symmetric(horizontal: 6),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color:
+                          isSelected ? style.bg : const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: isSelected
+                                ? style.color.withOpacity(0.4)
+                                : const Color(0xFFE2E8F0),
+                            width: isSelected ? 2 : 1,
+                          ),
+                          boxShadow: isSelected
+                              ? [
+                            BoxShadow(
+                                color: style.color.withOpacity(0.15),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4))
+                          ]
+                              : [],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 38,
+                                  height: 38,
+                                  decoration: BoxDecoration(
+                                      color: style.color.withOpacity(0.12),
+                                      borderRadius:
+                                      BorderRadius.circular(10)),
+                                  child: Center(
+                                    child:
+                                        PlaceCategoryGlyph(style: style, size: 22),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        p.name,
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF0F172A)),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        p.category,
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: style.color,
+                                            fontWeight: FontWeight.w600),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Spacer(),
+                            Row(
+                              children: [
+                                const Icon(Icons.access_time_rounded,
+                                    size: 12, color: Color(0xFF94A3B8)),
+                                const SizedBox(width: 4),
+                                Text(formatDuration(p.durationMin),
+                                    style: const TextStyle(
+                                        fontSize: 11.5,
+                                        color: Color(0xFF64748B))),
+                                const SizedBox(width: 10),
+                                const Icon(Icons.star_rounded,
+                                    size: 12, color: Color(0xFFFBBF24)),
+                                const SizedBox(width: 3),
+                                Text(p.rating.toStringAsFixed(1),
+                                    style: const TextStyle(
+                                        fontSize: 11.5,
+                                        color: Color(0xFF64748B),
+                                        fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                 ),
+
+                const SizedBox(height: 16),
+
+                // ── Full stop list ───────────────────
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(
+                    children: List.generate(day.places.length, (i) {
+                      final p = day.places[i];
+                      final style = placeCategoryStyle(p.category);
+                      final isLast = i == day.places.length - 1;
+                      return _StopRow(
+                        place: p,
+                        index: i,
+                        style: style,
+                        isLast: isLast,
+                        segment: i < segments.length ? segments[i] : null,
+                        isSelected: i == selectedIndex,
+                        onTap: () => onPlaceTap(p, i),
+                        formatDuration: formatDuration,
+                      );
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 32),
               ],
             ),
           ),
@@ -1241,179 +1231,445 @@ class _MapViewScreenState extends State<MapViewScreen>
       ),
     );
   }
+
+  String _totalTime() {
+    int total = 0;
+    for (final s in segments) total += (s.durationSeconds / 60).round();
+    final h = total ~/ 60;
+    final m = total % 60;
+    if (h == 0) return '${m}m';
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
 }
 
 // ─────────────────────────────────────────────
-// Small composable widgets
+// Stop Row (timeline style)
 // ─────────────────────────────────────────────
 
-class _GlassButton extends StatelessWidget {
+class _StopRow extends StatelessWidget {
+  final TripPlace place;
+  final int index;
+  final PlaceCategoryStyle style;
+  final bool isLast;
+  final SegmentInfo? segment;
+  final bool isSelected;
   final VoidCallback onTap;
-  final Widget child;
+  final String Function(int) formatDuration;
 
-  const _GlassButton({required this.onTap, required this.child});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        color: const Color(0xFF161B22).withOpacity(0.88),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-      ),
-      child: Center(child: child),
-    ),
-  );
-}
-
-class _StopPill extends StatelessWidget {
-  final String label;
-  final Color color;
-
-  const _StopPill({required this.label, required this.color});
+  const _StopRow({
+    required this.place,
+    required this.index,
+    required this.style,
+    required this.isLast,
+    required this.segment,
+    required this.isSelected,
+    required this.onTap,
+    required this.formatDuration,
+  });
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 30,
-    height: 30,
-    margin: const EdgeInsets.only(right: 4),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.15),
-      shape: BoxShape.circle,
-      border: Border.all(color: color.withOpacity(0.6)),
-    ),
-    child: Center(
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    ),
-  );
-}
-
-class _SegmentArrow extends StatelessWidget {
-  final String label;
-
-  const _SegmentArrow({required this.label});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      const Icon(Icons.arrow_forward_ios_rounded,
-          size: 10, color: Color(0xFF8B949E)),
-      const SizedBox(width: 2),
-      Text(
-        label,
-        style: const TextStyle(
-          color: Color(0xFF8B949E),
-          fontSize: 10.5,
-        ),
-      ),
-      const SizedBox(width: 4),
-    ],
-  );
-}
-
-class _SummaryChip extends StatelessWidget {
-  final IconData icon;
-  final String value;
-  final Color color;
-
-  const _SummaryChip(
-      {required this.icon, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding:
-    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.1),
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: color.withOpacity(0.25)),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) {
+    return Column(
       children: [
-        Icon(icon, color: color, size: 13),
-        const SizedBox(width: 5),
-        Text(
-          value,
-          style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w600),
+        GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected ? style.bg : Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
+              border: isSelected
+                  ? Border.all(
+                  color: style.color.withOpacity(0.3), width: 1.5)
+                  : null,
+            ),
+            child: Row(
+              children: [
+                // Timeline dot
+                Column(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: style.bg,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: style.color.withOpacity(0.35),
+                            width: 1.5),
+                      ),
+                      child: Center(
+                        child: PlaceCategoryGlyph(style: style, size: 24),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: isSelected
+                              ? style.color
+                              : const Color(0xFF0F172A),
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Text(
+                            place.category,
+                            style: TextStyle(
+                                fontSize: 11.5,
+                                color: style.color,
+                                fontWeight: FontWeight.w600),
+                          ),
+                          const Text('  ·  ',
+                              style: TextStyle(
+                                  color: Color(0xFFCBD5E1), fontSize: 12)),
+                          const Icon(Icons.schedule_rounded,
+                              size: 11, color: Color(0xFF94A3B8)),
+                          const SizedBox(width: 3),
+                          Text(
+                            formatDuration(place.durationMin),
+                            style: const TextStyle(
+                                fontSize: 11.5, color: Color(0xFF64748B)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.star_rounded,
+                        size: 13, color: Color(0xFFFBBF24)),
+                    const SizedBox(width: 3),
+                    Text(
+                      place.rating.toStringAsFixed(1),
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF475569)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
+        // Travel connector between stops
+        if (!isLast && segment != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 22),
+            child: Row(
+              children: [
+                Column(
+                  children: [
+                    Container(
+                        width: 2,
+                        height: 8,
+                        color: const Color(0xFFE2E8F0)),
+                    const Icon(Icons.directions_car_rounded,
+                        size: 13, color: Color(0xFF94A3B8)),
+                    Container(
+                        width: 2,
+                        height: 8,
+                        color: const Color(0xFFE2E8F0)),
+                  ],
+                ),
+                const SizedBox(width: 14),
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${segment!.durationLabel}  ·  ${segment!.distanceLabel}',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF64748B),
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
-    ),
-  );
+    );
+  }
 }
 
-class _InfoChip extends StatelessWidget {
+// ─────────────────────────────────────────────
+// Place Detail Card (shown on marker tap)
+// ─────────────────────────────────────────────
+
+class _PlaceDetailCard extends StatelessWidget {
+  final TripPlace place;
+  final int index;
+  final String Function(int) formatDuration;
+  final VoidCallback onDismiss;
+
+  const _PlaceDetailCard({
+    required this.place,
+    required this.index,
+    required this.formatDuration,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = placeCategoryStyle(place.category);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: style.color.withOpacity(0.25), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+              color: style.color.withOpacity(0.12),
+              blurRadius: 24,
+              offset: const Offset(0, 6)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            decoration: BoxDecoration(
+              color: style.bg,
+              borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(22)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                            color: style.color.withOpacity(0.2),
+                            blurRadius: 10)
+                      ]),
+                  child: Center(
+                    child: PlaceCategoryGlyph(style: style, size: 28),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF0F172A),
+                            letterSpacing: -0.4),
+                      ),
+                      const SizedBox(height: 3),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: style.color.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          place.category,
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: style.color,
+                              fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: onDismiss,
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.7),
+                        shape: BoxShape.circle),
+                    child: const Icon(Icons.close_rounded,
+                        size: 16, color: Color(0xFF64748B)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Stats row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: [
+                _StatBadge(
+                  icon: Icons.access_time_rounded,
+                  text: formatDuration(place.durationMin),
+                  color: style.color,
+                ),
+                const SizedBox(width: 8),
+                _StatBadge(
+                  icon: Icons.star_rounded,
+                  text: place.rating.toStringAsFixed(1),
+                  color: const Color(0xFFFBBF24),
+                ),
+                const SizedBox(width: 8),
+                _StatBadge(
+                  icon: Icons.wb_sunny_outlined,
+                  text: place.bestTime.isNotEmpty
+                      ? place.bestTime
+                      : 'Anytime',
+                  color: const Color(0xFFF97316),
+                ),
+              ],
+            ),
+          ),
+
+          // Description
+          if (place.description.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Text(
+                place.description,
+                style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF475569),
+                    height: 1.55),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+
+          // Tip
+          if (place.tips.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: const Color(0xFFFED7AA), width: 1),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('💡', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        place.tips,
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            color: Color(0xFFC2410C),
+                            fontWeight: FontWeight.w500,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBadge extends StatelessWidget {
   final IconData icon;
   final String text;
+  final Color color;
 
-  const _InfoChip({required this.icon, required this.text});
+  const _StatBadge(
+      {required this.icon, required this.text, required this.color});
 
   @override
   Widget build(BuildContext context) => Container(
     padding:
-    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: const Color(0xFF21262D),
-      borderRadius: BorderRadius.circular(6),
+      color: color.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: color.withOpacity(0.2)),
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon,
-            color: const Color(0xFF8B949E), size: 12),
-        const SizedBox(width: 4),
-        Text(
-          text,
-          style: const TextStyle(
-              color: Color(0xFF8B949E), fontSize: 11.5),
-        ),
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 5),
+        Text(text,
+            style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontWeight: FontWeight.w700)),
       ],
     ),
   );
 }
+
+// ─────────────────────────────────────────────
+// Loading overlay
+// ─────────────────────────────────────────────
 
 class _LoadingOverlay extends StatelessWidget {
   const _LoadingOverlay();
 
   @override
-  Widget build(BuildContext context) => Container(
-    color: Colors.black38,
-    child: const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CircularProgressIndicator(
-              color: Color(0xFF00E5BE), strokeWidth: 2.5),
-          SizedBox(height: 12),
-          Text(
-            'Fetching route…',
-            style: TextStyle(
-                color: Color(0xFF8B949E), fontSize: 13),
-          ),
-        ],
+  Widget build(BuildContext context) => Positioned.fill(
+    child: Container(
+      color: Colors.white.withOpacity(0.55),
+      child: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+                color: Color(0xFF14B8A6), strokeWidth: 2.5),
+            SizedBox(height: 12),
+            Text('Planning your route…',
+                style: TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     ),
   );
 }
 
 // ─────────────────────────────────────────────
-// Extension for entryFee access on TripPlace
+// Extension
 // ─────────────────────────────────────────────
 
 extension _TripPlaceFee on TripPlace {
-  int get entryFee => 0; // already in JSON; extend as needed
+  int get entryFee => 0;
 }

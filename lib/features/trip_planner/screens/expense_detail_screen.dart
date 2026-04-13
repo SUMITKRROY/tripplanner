@@ -3,9 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../core/constants/app_constants.dart';
-import '../../../core/routes/app_routes.dart';
 import '../../../core/utils/navigation_utils.dart';
+import '../../../core/widgets/trip_pill_top_bar.dart';
 import '../bloc/trip_planner_bloc.dart';
 import '../bloc/trip_planner_state.dart';
 import '../models/generate_trip_response_model.dart';
@@ -24,11 +23,17 @@ String _inr(num? v) {
   } else if (rounded >= 1000) {
     final formatted = rounded.toString().replaceAllMapped(
       RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
-      (m) => '${m[1]},',
+          (m) => '${m[1]},',
     );
     return '₹$formatted';
   }
   return '₹$rounded';
+}
+
+/// Wraps [_inr] with an ≈ prefix to signal approximate values.
+String _approxInr(num? v) {
+  if (v == null) return '—';
+  return '≈ ${_inr(v)}';
 }
 
 // ─────────────────────────────────────────────
@@ -36,7 +41,10 @@ String _inr(num? v) {
 // ─────────────────────────────────────────────
 
 class ExpenseDetailScreen extends StatelessWidget {
-  const ExpenseDetailScreen({super.key});
+  const ExpenseDetailScreen({super.key, this.showPillTopBar = true});
+
+  /// When false (e.g. inside [TripDashboardScreen]), the shell provides the bar.
+  final bool showPillTopBar;
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +64,10 @@ class ExpenseDetailScreen extends StatelessWidget {
             ),
           );
         }
-        return _ExpenseBody(data: state.data);
+        return _ExpenseBody(
+          data: state.data,
+          showPillTopBar: showPillTopBar,
+        );
       },
     );
   }
@@ -67,8 +78,12 @@ class ExpenseDetailScreen extends StatelessWidget {
 // ─────────────────────────────────────────────
 
 class _ExpenseBody extends StatefulWidget {
-  const _ExpenseBody({required this.data});
+  const _ExpenseBody({
+    required this.data,
+    required this.showPillTopBar,
+  });
   final GenerateTripResponseModel data;
+  final bool showPillTopBar;
 
   @override
   State<_ExpenseBody> createState() => _ExpenseBodyState();
@@ -81,7 +96,6 @@ class _ExpenseBodyState extends State<_ExpenseBody> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
 
     final data = widget.data;
     final e = data.expenses;
@@ -154,15 +168,19 @@ class _ExpenseBodyState extends State<_ExpenseBody> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // ── TOP BAR ──────────────────────────
-                    _TopBar(
-                      theme: theme,
-                      scheme: scheme,
-                      isDark: isDark,
-                      onBack: () => NavigationUtils.pop(context),
-                    ),
-
-                    const SizedBox(height: 20),
+                    if (widget.showPillTopBar) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: TripPillTopBar(
+                          style: TripPillTopBarStyle.embedded,
+                          onBack: () => NavigationUtils.pop(context),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ] else ...[
+                      const SizedBox(height: 8 + 52),
+                      const SizedBox(height: 12),
+                    ],
 
                     // ── PAGE TITLE ───────────────────────
                     Padding(
@@ -184,6 +202,36 @@ class _ExpenseBodyState extends State<_ExpenseBody> {
                             'Trip to $city  •  $persons Traveler${persons == 1 ? '' : 's'}',
                             style: theme.textTheme.bodyMedium?.copyWith(
                               color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+
+                          // ── DISCLAIMER CHIP ──────────────────
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF8E1),
+                              borderRadius: BorderRadius.circular(50),
+                              border: Border.all(color: const Color(0xFFFFCC02).withOpacity(0.6)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.info_outline_rounded,
+                                  size: 14,
+                                  color: Color(0xFF997300),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '≈ Average estimates  ·  Actual costs may vary',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFF997300),
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -255,99 +303,6 @@ class _ExpenseBodyState extends State<_ExpenseBody> {
               ),
             ),
 
-            // ── BOTTOM NAV ───────────────────────────
-            NavigationBar(
-              selectedIndex: _selectedNav,
-              onDestinationSelected: (i) {
-                setState(() => _selectedNav = i);
-                if (i == 0) {
-                  NavigationUtils.pushReplacementNamed(context, AppRoutes.home);
-                }
-                if (i == 1) {
-                  NavigationUtils.pop(context);
-                }
-              },
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.explore_outlined),
-                  selectedIcon: Icon(Icons.explore_rounded),
-                  label: 'Explore',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.event_note_outlined),
-                  selectedIcon: Icon(Icons.event_note_rounded),
-                  label: 'Itinerary',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.receipt_long_outlined),
-                  selectedIcon: Icon(Icons.receipt_long_rounded),
-                  label: 'Expenses',
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────
-//  TOP BAR  (pill — consistent with other screens)
-// ─────────────────────────────────────────────
-
-class _TopBar extends StatelessWidget {
-  const _TopBar({
-    required this.theme,
-    required this.scheme,
-    required this.isDark,
-    required this.onBack,
-  });
-
-  final ThemeData theme;
-  final ColorScheme scheme;
-  final bool isDark;
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF161E28) : Colors.white,
-          borderRadius: BorderRadius.circular(50),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.3 : 0.07),
-              blurRadius: 18,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.flight_takeoff_rounded, color: scheme.primary, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              AppConstants.topTittle,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.4,
-                color: scheme.onSurface,
-              ),
-            ),
-            const Spacer(),
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: scheme.primaryContainer,
-              child: Icon(
-                Icons.person_rounded,
-                size: 18,
-                color: scheme.onPrimaryContainer,
-              ),
-            ),
           ],
         ),
       ),
@@ -601,12 +556,12 @@ class _GrandTotalCard extends StatelessWidget {
             ),
           ),
 
-          // Amounts
+          // Amounts column
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                _inr(total),
+                _approxInr(total),           // ← ≈ prefix here
                 style: theme.textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.w900,
                   color: _primary,
@@ -616,10 +571,21 @@ class _GrandTotalCard extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                '${_inr(perPerson)} per person',
+                '${_approxInr(perPerson)} per person',   // ← ≈ prefix here
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF0077CC),
                   fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+
+              // ── RANGE DISCLAIMER ────────────────
+              Text(
+                '< costs may be lower  or  higher >',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Colors.grey.shade500,
+                  fontStyle: FontStyle.italic,
+                  letterSpacing: 0.1,
                 ),
               ),
             ],

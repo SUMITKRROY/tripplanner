@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../core/constants/app_constants.dart';
 import '../../../core/routes/app_routes.dart';
 import '../../../core/utils/navigation_utils.dart';
-import '../../../core/widgets/common_top_bar.dart';
+import '../../../core/widgets/trip_pill_top_bar.dart';
 import '../bloc/trip_planner_bloc.dart';
 import '../bloc/trip_planner_state.dart';
 import '../models/generate_trip_response_model.dart';
 import 'gallery_screen.dart';
+import '../widgets/place_category_visual.dart';
 import '../widgets/place_image.dart';
+import 'place_detail_screen.dart';
 
 // ─────────────────────────────────────────────
 //  DESIGN TOKENS  (self-contained, no AppTheme)
@@ -62,6 +63,21 @@ String _footerLabel(GenerateTripResponseModel data) {
       : 'Plan generated · Editable anytime';
 }
 
+TripDayPlanModel? _dayContainingPlace(
+  List<TripDayPlanModel> days,
+  PlaceModel target,
+) {
+  for (final d in days) {
+    for (final p in d.places) {
+      if (identical(p, target)) return d;
+      final a = p.name ?? '';
+      final b = target.name ?? '';
+      if (a.isNotEmpty && a == b) return d;
+    }
+  }
+  return null;
+}
+
 String _badgeLabel(String title) {
   final t = title.trim();
   if (t.length <= 18) return t.toUpperCase();
@@ -73,7 +89,10 @@ String _badgeLabel(String title) {
 // ─────────────────────────────────────────────
 
 class TripResultScreen extends StatelessWidget {
-  const TripResultScreen({super.key});
+  const TripResultScreen({super.key, this.showPillTopBar = true});
+
+  /// When false (e.g. inside [TripDashboardScreen]), the shell provides the bar.
+  final bool showPillTopBar;
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +112,10 @@ class TripResultScreen extends StatelessWidget {
             ),
           );
         }
-        return _TripPlanContent(data: state.data);
+        return _TripPlanContent(
+          data: state.data,
+          showPillTopBar: showPillTopBar,
+        );
       },
     );
   }
@@ -104,8 +126,12 @@ class TripResultScreen extends StatelessWidget {
 // ─────────────────────────────────────────────
 
 class _TripPlanContent extends StatefulWidget {
-  const _TripPlanContent({required this.data});
+  const _TripPlanContent({
+    required this.data,
+    required this.showPillTopBar,
+  });
   final GenerateTripResponseModel data;
+  final bool showPillTopBar;
 
   @override
   State<_TripPlanContent> createState() => _TripPlanContentState();
@@ -134,53 +160,6 @@ class _TripPlanContentState extends State<_TripPlanContent>
     super.dispose();
   }
 
-  void _onBottomNav(int i) {
-    if (i == 1) return; // already here
-    if (i == 0) {
-      NavigationUtils.pushNamed(
-        context,
-        AppRoutes.mapView,
-        arguments: _buildMapPayload(widget.data),
-      );
-      return;
-    }
-    NavigationUtils.pushNamed(context, AppRoutes.expenseDetail);
-  }
-
-  Map<String, dynamic> _buildMapPayload(GenerateTripResponseModel data) {
-    return {
-      'city': data.city ?? 'Trip',
-      'apiKey': AppConstants.googleMapsApiKey,
-      'tripPlan': data.tripPlan
-          .map(
-            (day) => {
-              'day': day.day ?? 1,
-              'theme': day.theme ?? '',
-              'description': day.description ?? '',
-              'totalTimeMin': day.totalTimeMin ?? 0,
-              'places': day.places
-                  .where((p) => p.lat != null && p.lng != null)
-                  .map(
-                    (p) => {
-                      'name': p.name ?? '',
-                      'lat': p.lat!,
-                      'lng': p.lng!,
-                      'duration': p.duration ?? 60,
-                      'category': p.category ?? '',
-                      'description': p.description ?? '',
-                      'tips': p.tips ?? '',
-                      'bestTime': p.bestTime ?? '',
-                      'rating': p.rating ?? 0.0,
-                      'imageUrl': p.imageUrl ?? '',
-                      'openingHours': p.openingHours ?? '',
-                    },
-                  )
-                  .toList(),
-            },
-          )
-          .toList(),
-    };
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -210,6 +189,8 @@ class _TripPlanContentState extends State<_TripPlanContent>
         ? _formatBudget(data.expenses!.total!)
         : '—';
 
+    final shellTopGap = !widget.showPillTopBar ? 8.0 + 52.0 : 0.0;
+
     return Scaffold(
       backgroundColor: scheme.surface,
       body: SafeArea(
@@ -219,16 +200,18 @@ class _TripPlanContentState extends State<_TripPlanContent>
             controller: _scroll,
             physics: const BouncingScrollPhysics(),
             slivers: [
-              // ── TOP BAR ───────────────────────────────
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(_T.s4, _T.s3, _T.s4, 0),
-                  child: CommonTopBar(
-                    onBack: () => NavigationUtils.pop(context),
-                    onSearch: () {},
+              if (widget.showPillTopBar)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(_T.s4, _T.s3, _T.s4, 0),
+                    child: TripPillTopBar(
+                      showSearch: true,
+                      onSearch: () {},
+                    ),
                   ),
-                ),
-              ),
+                )
+              else
+                SliverToBoxAdapter(child: SizedBox(height: shellTopGap)),
 
               // ── HERO CARD ─────────────────────────────
               SliverToBoxAdapter(
@@ -320,6 +303,8 @@ class _TripPlanContentState extends State<_TripPlanContent>
                               const SizedBox(width: _T.s3),
                           itemBuilder: (ctx, i) => _HighlightCard(
                             place: highlights[i],
+                            city: data.city,
+                            day: _dayContainingPlace(data.tripPlan, highlights[i]),
                             theme: theme,
                             scheme: scheme,
                           ),
@@ -359,6 +344,7 @@ class _TripPlanContentState extends State<_TripPlanContent>
                     child: _DayCard(
                       day: data.tripPlan[i],
                       index: i,
+                      city: data.city,
                       theme: theme,
                       scheme: scheme,
                     ),
@@ -395,28 +381,6 @@ class _TripPlanContentState extends State<_TripPlanContent>
         ),
       ),
 
-      // ── BOTTOM NAV ──────────────────────────────
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: 1,
-        onDestinationSelected: _onBottomNav,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.explore_outlined),
-            selectedIcon: Icon(Icons.explore_rounded),
-            label: 'Map',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.event_note_outlined),
-            selectedIcon: Icon(Icons.event_note_rounded),
-            label: 'Itinerary',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long_rounded),
-            label: 'Expenses',
-          ),
-        ],
-      ),
     );
   }
 }
@@ -654,11 +618,15 @@ class _HeroChip extends StatelessWidget {
 class _HighlightCard extends StatelessWidget {
   const _HighlightCard({
     required this.place,
+    this.city,
+    this.day,
     required this.theme,
     required this.scheme,
   });
 
   final PlaceModel place;
+  final String? city;
+  final TripDayPlanModel? day;
   final ThemeData theme;
   final ColorScheme scheme;
 
@@ -669,58 +637,75 @@ class _HighlightCard extends StatelessWidget {
         ? place.category!
         : 'Highlight';
 
-    return SizedBox(
-      width: 158,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(_T.rMd),
-            child: Stack(
-              children: [
-                PlaceImage(
-                  imageUrl: place.imageUrl!,
-                  height: 118,
-                  width: 158,
-                  fit: BoxFit.cover,
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.9),
-                      shape: BoxShape.circle,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PlaceDetailScreen(
+                place: place,
+                city: city,
+                day: day,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(_T.rMd),
+        child: SizedBox(
+          width: 158,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(_T.rMd),
+                child: Stack(
+                  children: [
+                    PlaceImage(
+                      imageUrl: place.imageUrl!,
+                      height: 118,
+                      width: 158,
+                      fit: BoxFit.cover,
                     ),
-                    child: Icon(
-                      Icons.favorite_border_rounded,
-                      size: 15,
-                      color: scheme.primary,
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.favorite_border_rounded,
+                          size: 15,
+                          color: scheme.primary,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: _T.s2),
+              Text(
+                name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                sub,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: _T.s2),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          Text(
-            sub,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -734,12 +719,14 @@ class _DayCard extends StatelessWidget {
   const _DayCard({
     required this.day,
     required this.index,
+    this.city,
     required this.theme,
     required this.scheme,
   });
 
   final TripDayPlanModel day;
   final int index;
+  final String? city;
   final ThemeData theme;
   final ColorScheme scheme;
 
@@ -752,30 +739,62 @@ class _DayCard extends StatelessWidget {
     Icons.directions_walk_rounded,
   ];
 
+  static List<({PlaceModel? place, String text})> _previewLines(
+      TripDayPlanModel day) {
+    final out = <({PlaceModel? place, String text})>[];
+    for (final p in day.places) {
+      if (out.length >= 3) break;
+      final label = (p.name ?? p.description ?? '').trim();
+      if (label.isEmpty) continue;
+      out.add((place: p, text: label));
+    }
+    if (out.isEmpty &&
+        day.description != null &&
+        day.description!.trim().isNotEmpty) {
+      for (final raw in day.description!.split(RegExp(r'[.\n]'))) {
+        if (out.length >= 3) break;
+        final line = raw.trim();
+        if (line.isEmpty) continue;
+        out.add((place: null, text: line));
+      }
+    }
+    while (out.length < 3) {
+      out.add((place: null, text: 'Explore local highlights'));
+    }
+    return out.take(3).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final n = day.day ?? (index + 1);
     final title = day.theme ?? 'Day $n';
     final icon = _icons[index % _icons.length];
 
-    var bullets = day.places
-        .take(3)
-        .map((p) => p.name ?? p.description ?? 'Activity')
-        .where((s) => s.isNotEmpty)
-        .toList();
+    final previewLines = _previewLines(day);
 
-    if (bullets.isEmpty &&
-        day.description != null &&
-        day.description!.trim().isNotEmpty) {
-      bullets = day.description!
-          .split(RegExp(r'[.\n]'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .take(3)
-          .toList();
+    PlaceModel? primaryPlace;
+    for (final p in day.places) {
+      if ((p.name ?? p.description ?? '').trim().isNotEmpty) {
+        primaryPlace = p;
+        break;
+      }
     }
-    while (bullets.length < 3) {
-      bullets.add('Explore local highlights');
+    final Widget trailingIcon;
+    if (primaryPlace != null) {
+      final catStyle =
+          placeCategoryStyle(primaryPlace.category ?? '');
+      if (catStyle.imageAsset != null) {
+        trailingIcon = Image.asset(
+          catStyle.imageAsset!,
+          width: 28,
+          height: 28,
+          fit: BoxFit.contain,
+        );
+      } else {
+        trailingIcon = Icon(icon, color: scheme.primary, size: 26);
+      }
+    } else {
+      trailingIcon = Icon(icon, color: scheme.primary, size: 26);
     }
 
     return Container(
@@ -821,39 +840,62 @@ class _DayCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(icon, color: scheme.primary, size: 26),
+              trailingIcon,
             ],
           ),
           const SizedBox(height: _T.s3),
-          ...bullets
-              .take(3)
-              .map(
-                (line) => Padding(
-                  padding: const EdgeInsets.only(bottom: _T.s2),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '• ',
-                        style: TextStyle(
-                          color: scheme.primary,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 15,
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          line,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            height: 1.35,
-                          ),
-                        ),
-                      ),
-                    ],
+          ...previewLines.map(
+            (line) => Padding(
+              padding: const EdgeInsets.only(bottom: _T.s2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '• ',
+                    style: TextStyle(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 15,
+                    ),
                   ),
-                ),
+                  Expanded(
+                    child: line.place != null
+                        ? GestureDetector(
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => PlaceDetailScreen(
+                                    place: line.place!,
+                                    city: city,
+                                    day: day,
+                                  ),
+                                ),
+                              );
+                            },
+                            child: Text(
+                              line.text,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: scheme.primary,
+                                fontWeight: FontWeight.w600,
+                                height: 1.35,
+                                decoration: TextDecoration.underline,
+                                decorationColor:
+                                    scheme.primary.withOpacity(0.4),
+                              ),
+                            ),
+                          )
+                        : Text(
+                            line.text,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              height: 1.35,
+                            ),
+                          ),
+                  ),
+                ],
               ),
+            ),
+          ),
           const SizedBox(height: _T.s2),
           Container(
             padding: const EdgeInsets.symmetric(

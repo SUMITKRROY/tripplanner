@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../core/constants/app_constants.dart';
-import '../../../core/routes/app_routes.dart';
 import '../../../core/utils/navigation_utils.dart';
+import '../../../core/widgets/trip_pill_top_bar.dart';
 import '../bloc/trip_planner_bloc.dart';
 import '../bloc/trip_planner_state.dart';
 import '../models/generate_trip_response_model.dart';
+import '../widgets/place_category_visual.dart';
 import '../widgets/place_image.dart';
+import 'place_detail_screen.dart';
 
 // ─────────────────────────────────────────────
 //  ROOT SCREEN (BLoC-wired)
@@ -51,8 +52,22 @@ class _ViewFullPlanContent extends StatefulWidget {
 }
 
 class _ViewFullPlanContentState extends State<_ViewFullPlanContent> {
+  /// Index of the open day card, or `-1` when all are collapsed (taller hero).
   int _expandedIndex = 0;
   int _selectedNav = 1;
+
+  static const double _heroHeightDayOpen = 220;
+  static const double _heroHeightAllCollapsed = 340;
+
+  void _onDayHeaderTap(int i) {
+    setState(() {
+      if (_expandedIndex == i) {
+        _expandedIndex = -1;
+      } else {
+        _expandedIndex = i;
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -81,10 +96,12 @@ class _ViewFullPlanContentState extends State<_ViewFullPlanContent> {
                 SliverToBoxAdapter(
                   child: _HeroWithTopBar(
                     heroImageUrl: heroImageUrl,
+                    height: _expandedIndex < 0
+                        ? _heroHeightAllCollapsed
+                        : _heroHeightDayOpen,
                     theme: theme,
                     scheme: scheme,
                     isDark: isDark,
-                    onBack: () => NavigationUtils.pop(context),
                   ),
                 ),
 
@@ -108,8 +125,9 @@ class _ViewFullPlanContentState extends State<_ViewFullPlanContent> {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _DayPlanCard(
                           day: day,
+                          city: data.city,
                           isExpanded: _expandedIndex == i,
-                          onTap: () => setState(() => _expandedIndex = i),
+                          onHeaderTap: () => _onDayHeaderTap(i),
                           theme: theme,
                           scheme: scheme,
                         ),
@@ -145,67 +163,34 @@ class _ViewFullPlanContentState extends State<_ViewFullPlanContent> {
             ),
           ),
 
-          // ── BOTTOM NAVIGATION BAR ─────────────
-          NavigationBar(
-            selectedIndex: _selectedNav,
-            onDestinationSelected: (i) {
-              setState(() => _selectedNav = i);
-              if (i == 0) {
-                NavigationUtils.pushReplacementNamed(context, AppRoutes.home);
-              }
-              if (i == 2) {
-                NavigationUtils.pushNamed(context, AppRoutes.expenseDetail);
-              }
-            },
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.explore_outlined),
-                selectedIcon: Icon(Icons.explore_rounded),
-                label: 'Explore',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.event_note_outlined),
-                selectedIcon: Icon(Icons.event_note_rounded),
-                label: 'Itinerary',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.receipt_long_outlined),
-                selectedIcon: Icon(Icons.receipt_long_rounded),
-                label: 'Expenses',
-              ),
-            ],
-          ),
+
         ],
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────
-//  HERO IMAGE + FLOATING TOP BAR
-//  Full-width image at top; pill top bar floats
-//  over it using a Stack.
-// ─────────────────────────────────────────────
-
 class _HeroWithTopBar extends StatelessWidget {
   const _HeroWithTopBar({
     required this.heroImageUrl,
+    required this.height,
     required this.theme,
     required this.scheme,
     required this.isDark,
-    required this.onBack,
   });
 
   final String? heroImageUrl;
+  final double height;
   final ThemeData theme;
   final ColorScheme scheme;
   final bool isDark;
-  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 220,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeInOutCubic,
+      height: height,
       child: Stack(
         children: [
           // ── FULL-WIDTH HERO IMAGE ──────────────
@@ -248,67 +233,9 @@ class _HeroWithTopBar extends StatelessWidget {
             top: MediaQuery.of(context).padding.top + 8,
             left: 16,
             right: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF161E28).withOpacity(0.95)
-                    : Colors.white.withOpacity(0.95),
-                borderRadius: BorderRadius.circular(50),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(isDark ? 0.35 : 0.10),
-                    blurRadius: 20,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  // Back button
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 40,
-                      minHeight: 40,
-                    ),
-                    onPressed: onBack,
-                    icon: Icon(
-                      Icons.chevron_left_rounded,
-                      size: 28,
-                      color: scheme.onSurface,
-                    ),
-                  ),
-                  // Logo + brand
-                  Icon(
-                    Icons.flight_takeoff_rounded,
-                    color: scheme.primary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 7),
-                  Text(
-                    AppConstants.topTittle,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.4,
-                      color: scheme.onSurface,
-                    ),
-                  ),
-                  const Spacer(),
-                  // Avatar
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: scheme.primaryContainer,
-                    child: Icon(
-                      Icons.person_rounded,
-                      size: 17,
-                      color: scheme.onPrimaryContainer,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                ],
-              ),
+            child: TripPillTopBar(
+              style: TripPillTopBarStyle.floatingOverMedia,
+              onBack: () => NavigationUtils.pop(context),
             ),
           ),
         ],
@@ -400,15 +327,17 @@ class _CityInfoSection extends StatelessWidget {
 class _DayPlanCard extends StatelessWidget {
   const _DayPlanCard({
     required this.day,
+    this.city,
     required this.isExpanded,
-    required this.onTap,
+    required this.onHeaderTap,
     required this.theme,
     required this.scheme,
   });
 
   final TripDayPlanModel day;
+  final String? city;
   final bool isExpanded;
-  final VoidCallback onTap;
+  final VoidCallback onHeaderTap;
   final ThemeData theme;
   final ColorScheme scheme;
 
@@ -464,114 +393,122 @@ class _DayPlanCard extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── HEADER ROW ───────────────────
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Day number
-                    Text(
-                      dayNum,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        color: isExpanded
-                            ? scheme.primary
-                            : scheme.onSurface.withOpacity(0.25),
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -1,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onHeaderTap,
+                borderRadius: BorderRadius.vertical(
+                  top: const Radius.circular(20),
+                  bottom: Radius.circular(isExpanded ? 0 : 20),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, isExpanded ? 8 : 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        dayNum,
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          color: isExpanded
+                              ? scheme.primary
+                              : scheme.onSurface.withOpacity(0.25),
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -1,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-
-                    // Title + subtitle
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 2),
-                          Text(
-                            title,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              height: 1.2,
-                            ),
-                          ),
-                          if (_subtitle.isNotEmpty) ...[
-                            const SizedBox(height: 3),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 2),
                             Text(
-                              _subtitle,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
+                              title,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                height: 1.2,
                               ),
                             ),
+                            if (_subtitle.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                _subtitle,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-
-                    // Chevron icon
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Icon(
-                        isExpanded
-                            ? Icons.keyboard_arrow_up_rounded
-                            : Icons.keyboard_arrow_down_rounded,
-                        color: scheme.onSurfaceVariant,
-                        size: 24,
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Icon(
+                          isExpanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.keyboard_arrow_down_rounded,
+                          color: scheme.onSurfaceVariant,
+                          size: 24,
+                        ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (isExpanded && day.places.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Divider(
+                      height: 22,
+                      thickness: 0.6,
+                      color: scheme.outlineVariant.withOpacity(0.45),
                     ),
+                    ...day.places
+                        .take(3)
+                        .toList()
+                        .asMap()
+                        .entries
+                        .map(
+                          (e) => _PlaceRow(
+                            place: e.value,
+                            index: e.key,
+                            city: city,
+                            day: day,
+                            theme: theme,
+                            scheme: scheme,
+                            isLast:
+                                e.key ==
+                                (day.places.length > 3
+                                    ? 2
+                                    : day.places.length - 1),
+                          ),
+                        ),
+                    if (day.places.length > 3) ...[
+                      const SizedBox(height: 8),
+                      Center(
+                        child: Text(
+                          '+ ${day.places.length - 3} more stops',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: scheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-
-                // ── EXPANDED PLACE ROWS ──────────
-                if (isExpanded && day.places.isNotEmpty) ...[
-                  Divider(
-                    height: 22,
-                    thickness: 0.6,
-                    color: scheme.outlineVariant.withOpacity(0.45),
-                  ),
-                  ...day.places
-                      .take(3)
-                      .toList()
-                      .asMap()
-                      .entries
-                      .map(
-                        (e) => _PlaceRow(
-                          place: e.value,
-                          index: e.key,
-                          theme: theme,
-                          scheme: scheme,
-                          isLast:
-                              e.key ==
-                              (day.places.length > 3
-                                  ? 2
-                                  : day.places.length - 1),
-                        ),
-                      ),
-                  if (day.places.length > 3) ...[
-                    const SizedBox(height: 8),
-                    Center(
-                      child: Text(
-                        '+ ${day.places.length - 3} more stops',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: scheme.primary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ],
-            ),
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -587,6 +524,8 @@ class _PlaceRow extends StatelessWidget {
   const _PlaceRow({
     required this.place,
     required this.index,
+    this.city,
+    required this.day,
     required this.theme,
     required this.scheme,
     required this.isLast,
@@ -594,6 +533,8 @@ class _PlaceRow extends StatelessWidget {
 
   final PlaceModel place;
   final int index;
+  final String? city;
+  final TripDayPlanModel day;
   final ThemeData theme;
   final ColorScheme scheme;
   final bool isLast;
@@ -617,12 +558,28 @@ class _PlaceRow extends StatelessWidget {
     final name = place.name ?? 'Place';
     final desc = place.description ?? place.category ?? '';
     final hasImage = place.imageUrl != null && place.imageUrl!.isNotEmpty;
+    final catStyle = placeCategoryStyle(place.category ?? '');
 
     return Padding(
       padding: EdgeInsets.only(bottom: isLast ? 0 : 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => PlaceDetailScreen(
+                  place: place,
+                  city: city,
+                  day: day,
+                ),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           // ── TIMELINE INDICATOR ───────────────
           SizedBox(
             width: 16,
@@ -665,13 +622,9 @@ class _PlaceRow extends StatelessWidget {
               child: hasImage
                   ? PlaceImage(imageUrl: place.imageUrl!, fit: BoxFit.cover)
                   : Container(
-                      color: scheme.surfaceContainerHighest,
+                      color: catStyle.bg,
                       alignment: Alignment.center,
-                      child: Icon(
-                        Icons.place_rounded,
-                        color: scheme.primary,
-                        size: 26,
-                      ),
+                      child: PlaceCategoryGlyph(style: catStyle, size: 30),
                     ),
             ),
           ),
@@ -689,6 +642,9 @@ class _PlaceRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                    decoration: TextDecoration.underline,
+                    decorationColor: scheme.primary.withOpacity(0.35),
                   ),
                 ),
                 if (desc.isNotEmpty) ...[
@@ -729,7 +685,9 @@ class _PlaceRow extends StatelessWidget {
               ],
             ),
           ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../features/trip_planner/screens/expense_detail_screen.dart';
 import '../../features/trip_planner/screens/home_screen.dart';
 import '../../features/trip_planner/screens/loading_screen.dart';
 import '../../features/trip_planner/screens/map_view_screen.dart';
 import '../../features/trip_planner/screens/splash_screen.dart';
-import '../../features/trip_planner/screens/trip_analysis_success_screen.dart';
-import '../../features/trip_planner/screens/trip_result_screen.dart';
+import '../../features/trip_planner/screens/trip_dashboard_screen.dart';
 import '../../features/trip_planner/screens/view_full_plan_screen.dart';
 
 class AppRoutes {
@@ -39,13 +37,9 @@ class AppRoutes {
       case tripResult:
         return MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => const TripResultScreen(),
+          builder: (_) => const TripDashboardScreen(initialIndex: 1),
         );
-      case tripAnalysisSuccess:
-        return MaterialPageRoute<void>(
-          settings: settings,
-          builder: (_) => const TripAnalysisSuccessScreen(),
-        );
+
 
     // ── Map View ────────────────────────────────────────────────────────
     // Push with either:
@@ -84,7 +78,7 @@ class AppRoutes {
       case expenseDetail:
         return MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => const ExpenseDetailScreen(),
+          builder: (_) => const TripDashboardScreen(initialIndex: 2),
         );
       case viewFullPlan:
         return MaterialPageRoute<void>(

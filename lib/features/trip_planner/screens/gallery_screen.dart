@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/widgets/common_top_bar.dart';
-import '../../../core/utils/navigation_utils.dart';
+import '../../../core/widgets/trip_pill_top_bar.dart';
 import '../widgets/place_image.dart';
 
 class GalleryScreen extends StatelessWidget {
@@ -21,7 +20,7 @@ class GalleryScreen extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: CommonTopBar(onBack: () => NavigationUtils.pop(context)),
+              child: const TripPillTopBar(),
             ),
             Expanded(
               child: imageUrls.isEmpty
